@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; }
+  html, body { width: 512px; height: 512px; overflow: hidden; background: transparent; }
+  .icon {
+    position: relative;
+    width: 512px; height: 512px;
+    background:
+      radial-gradient(85% 70% at 20% 10%, #a78bfa 0%, rgba(167,139,250,0) 60%),
+      radial-gradient(90% 80% at 100% 96%, #f43f8e 0%, rgba(244,63,142,0) 58%),
+      linear-gradient(150deg, #6d28d9 0%, #6b21a8 45%, #9d174d 100%);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .dots {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(255,255,255,.30) 1.9px, transparent 2.2px);
+    background-size: 18px 18px;
+    -webkit-mask-image: radial-gradient(100% 90% at 82% 90%, #000 0%, transparent 66%);
+    mask-image: radial-gradient(100% 90% at 82% 90%, #000 0%, transparent 66%);
+  }
+  .ray {
+    position: absolute; left: 50%; top: 50%; width: 760px; height: 760px;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(from 200deg at 50% 50%,
+      rgba(255,255,255,.16) 0deg 9deg, transparent 9deg 34deg,
+      rgba(255,255,255,.10) 34deg 41deg, transparent 41deg 78deg,
+      rgba(255,255,255,.14) 78deg 86deg, transparent 86deg 140deg,
+      rgba(255,255,255,.09) 140deg 147deg, transparent 147deg 200deg,
+      rgba(255,255,255,.13) 200deg 208deg, transparent 208deg 268deg,
+      rgba(255,255,255,.08) 268deg 274deg, transparent 274deg 330deg,
+      rgba(255,255,255,.12) 330deg 337deg, transparent 337deg 360deg);
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 34%, #000 62%, transparent 96%);
+    mask-image: radial-gradient(circle at 50% 50%, transparent 34%, #000 62%, transparent 96%);
+    opacity: .45;
+  }
+  svg.mark { position: relative; width: 352px; height: 352px; filter: drop-shadow(0 16px 22px rgba(38, 8, 74, .5)); }
+</style>
+</head>
+<body>
+  <div class="icon">
+    <div class="ray"></div>
+    <div class="dots"></div>
+    <svg class="mark" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="pageL" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ece7fb"/>
+        </linearGradient>
+        <linearGradient id="pageR" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#f7f4ff"/><stop offset="1" stop-color="#ded6f6"/>
+        </linearGradient>
+      </defs>
+
+      <!-- soft shadow under the book -->
+      <ellipse cx="110" cy="186" rx="78" ry="12" fill="#3b0764" opacity=".35"/>
+
+      <!-- left page -->
+      <path d="M26 46 C56 33 82 33 110 43 L110 178 C82 168 56 168 26 181 Z"
+            fill="url(#pageL)" stroke="#4c1d95" stroke-opacity=".28" stroke-width="2"/>
+      <!-- right page -->
+      <path d="M194 46 C164 33 138 33 110 43 L110 178 C138 168 164 168 194 181 Z"
+            fill="url(#pageR)" stroke="#4c1d95" stroke-opacity=".28" stroke-width="2"/>
+
+      <!-- left page panels -->
+      <rect x="40" y="58" width="56" height="48" rx="7" fill="#6d28d9"/>
+      <rect x="40" y="114" width="56" height="24" rx="7" fill="#a21caf"/>
+      <rect x="40" y="146" width="34" height="18" rx="6" fill="#e11d72"/>
+
+      <!-- right page panels -->
+      <rect x="124" y="58" width="30" height="30" rx="7" fill="#e11d72"/>
+      <rect x="160" y="58" width="20" height="30" rx="6" fill="#c4b5fd"/>
+      <rect x="124" y="96" width="56" height="34" rx="7" fill="#7c3aed"/>
+      <rect x="124" y="138" width="26" height="26" rx="6" fill="#c4b5fd"/>
+      <rect x="156" y="138" width="24" height="26" rx="6" fill="#a21caf"/>
+
+      <!-- spine -->
+      <path d="M110 43 L110 178" stroke="#4c1d95" stroke-opacity=".45" stroke-width="3"/>
+      <path d="M110 43 L106 44 L106 177 L110 178 Z" fill="#4c1d95" opacity=".18"/>
+
+      <!-- spark -->
+      <path d="M186 22 L191.5 36 L206 41.5 L191.5 47 L186 61 L180.5 47 L166 41.5 L180.5 36 Z"
+            fill="#ffffff" opacity=".92"/>
+      <path d="M40 26 L43 33 L50 36 L43 39 L40 46 L37 39 L30 36 L37 33 Z"
+            fill="#ffffff" opacity=".6"/>
+    </svg>
+  </div>
+</body>
+</html>

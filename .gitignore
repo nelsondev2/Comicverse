@@ -1,0 +1,16 @@
+# build output
+dist/
+release/
+
+# local dev helpers / test artefacts
+tests/shots/
+tests/fixtures/
+tools/
+.tmp/
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
