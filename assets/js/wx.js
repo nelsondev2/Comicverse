@@ -109,18 +109,39 @@
 
   /* ---------- throttled updates (respecting messenger limits) ---------- */
   var pending = {};
+  var pendingNow = [];      // mensajes únicos (p. ej. «terminado»), en orden
   var lastSent = 0;
   var flushTimer = null;
+
+  function interval() { return WX.sendUpdateInterval || 10000; }
+
+  function schedule(wait) {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(flush, Math.max(20, wait));
+  }
 
   function flush() {
     var w = api();
     flushTimer = null;
     if (!w || typeof w.sendUpdate !== 'function') return;
     var keys = Object.keys(pending);
-    if (!keys.length) return;
-    var wait = Math.max(0, (lastSent + (WX.sendUpdateInterval || 10000)) - Date.now());
+    if (!keys.length && !pendingNow.length) return;
+    var wait = Math.max(0, (lastSent + interval()) - Date.now());
     if (wait > 0) {
-      if (!flushTimer) flushTimer = setTimeout(flush, wait + 30);
+      schedule(wait + 30);
+      return;
+    }
+    // Los mensajes únicos se envían primero y de uno en uno: el messenger
+    // limita la frecuencia con sendUpdateInterval.
+    if (pendingNow.length) {
+      var one = pendingNow.shift();
+      try {
+        w.sendUpdate(one.update, one.descr || '');
+        lastSent = Date.now();
+      } catch (err) {
+        console.warn('[comicverse] sendUpdate', err);
+      }
+      if (pendingNow.length || Object.keys(pending).length) schedule(interval() + 30);
       return;
     }
     var batch = pending;
@@ -144,20 +165,18 @@
 
   WX.queueUpdate = function (key, payload, descr) {
     pending[key] = payload;
-    if (flushTimer) return;
-    flushTimer = setTimeout(flush, 80);
+    if (!flushTimer) schedule(80);
   };
 
   WX.sendNow = function (payload, descr, extra) {
     var w = api();
     if (!w || typeof w.sendUpdate !== 'function') return false;
-    try {
-      var update = { payload: payload };
-      if (extra) Object.assign(update, extra);
-      w.sendUpdate(update, descr || '');
-      lastSent = Date.now();
-      return true;
-    } catch (e) { return false; }
+    var update = { payload: payload };
+    if (extra) Object.assign(update, extra);
+    // Se encola y respeta sendUpdateInterval; nunca se descarta.
+    pendingNow.push({ update: update, descr: descr || '' });
+    if (!flushTimer) schedule(80);
+    return true;
   };
 
   /** Unwrap batch payloads so the app only sees individual messages. */

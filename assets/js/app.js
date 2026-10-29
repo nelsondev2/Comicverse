@@ -3,7 +3,7 @@
   'use strict';
 
   var App = {
-    VERSION: '1.0.0',
+    VERSION: '1.0.1',
     settings: {
       theme: 'dark',
       accent: 'violet',
@@ -333,9 +333,6 @@
     });
     U.$('#btnNewCollection').addEventListener('click', function () { Library.createCollection(); });
     U.$('#btnNewCollection2').addEventListener('click', function () { Library.createCollection(); });
-    var fab = U.$('#fabImport');
-    if (fab) fab.addEventListener('click', function () { Library.importFiles(); });
-
     var appbar = U.$('.appbar');
     global.addEventListener('scroll', U.throttle(function () {
       if (appbar) appbar.classList.toggle('is-scrolled', global.scrollY > 4);

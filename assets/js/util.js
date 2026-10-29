@@ -258,6 +258,15 @@
 
   /* ---------- overlay stack ---------- */
   var overlays = [];
+  var lastFocus = null;
+
+  var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function focusables(root) {
+    return Array.prototype.filter.call(root.querySelectorAll(FOCUSABLE), function (n) {
+      return !!(n.offsetWidth || n.offsetHeight || n.getClientRects().length);
+    });
+  }
 
   function lockScroll(on) {
     document.body.style.overflow = on ? 'hidden' : '';
@@ -276,11 +285,29 @@
     setTimeout(function () {
       o.els.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
     }, 320);
-    if (!overlays.length) lockScroll(false);
+    if (o.cleanup) { try { o.cleanup(); } catch (err) {} o.cleanup = null; }
+    if (!overlays.length) {
+      lockScroll(false);
+      if (lastFocus && lastFocus.focus && document.contains(lastFocus) && lastFocus.getClientRects().length) {
+        try { lastFocus.focus({ preventScroll: true }); } catch (err) {}
+      }
+    }
     if (o.onClose) o.onClose();
   }
 
   document.addEventListener('keydown', function (e) {
+    if (e.key === 'Tab') {
+      var top2 = topOverlay();
+      if (!top2) return;
+      var dialog = top2.els[0];
+      var list = focusables(dialog);
+      if (!list.length) { e.preventDefault(); dialog.focus(); return; }
+      var firstNode = list[0], lastNode = list[list.length - 1];
+      if (!dialog.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? lastNode : firstNode).focus(); return; }
+      if (e.shiftKey && document.activeElement === firstNode) { e.preventDefault(); lastNode.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastNode) { e.preventDefault(); firstNode.focus(); }
+      return;
+    }
     if (e.key !== 'Escape') return;
     var top = topOverlay();
     if (top && top.dismissable) {
@@ -300,7 +327,7 @@
     var backdrop = U.el('div', { class: 'sheet-backdrop' });
     var sheet = U.el('div', {
       class: 'sheet' + (opts.center ? ' sheet--center' : '') + (opts.wide ? ' sheet--wide' : '') + (opts.className ? ' ' + opts.className : ''),
-      role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title || 'Diálogo'
+      role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title || 'Diálogo', tabindex: '-1'
     });
 
     if (!opts.center) sheet.appendChild(U.el('div', { class: 'sheet__grab' }));
@@ -346,13 +373,14 @@
 
     // drag to dismiss
     if (dismissable && !opts.center) {
-      var startY = null, delta = 0, dragging = false;
+      var startY = null, delta = 0, dragging = false, docBound = false;
       var grab = sheet.querySelector('.sheet__grab') || sheet.querySelector('.sheet__head');
       var onDown = function (e) {
         if (e.target.closest('button, input, textarea, select, a')) return;
         startY = e.touches ? e.touches[0].clientY : e.clientY;
         dragging = true; delta = 0;
         sheet.style.transition = 'none';
+        bindDoc();
       };
       var onMove = function (e) {
         if (!dragging) return;
@@ -361,7 +389,20 @@
         sheet.style.transform = 'translateY(' + delta + 'px)';
         backdrop.style.opacity = String(Math.max(0, 1 - delta / 480));
       };
+      var unbindDoc = function () {
+        if (!docBound) return;
+        docBound = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      var bindDoc = function () {
+        if (docBound) return;
+        docBound = true;
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      };
       var onUp = function () {
+        unbindDoc();
         if (!dragging) return;
         dragging = false;
         sheet.style.transition = '';
@@ -375,18 +416,27 @@
         grab.addEventListener('touchend', onUp);
         grab.addEventListener('mousedown', onDown);
       }
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      overlay.cleanup = unbindDoc;
     }
 
     document.body.appendChild(backdrop);
     document.body.appendChild(sheet);
     overlays.push(overlay);
     lockScroll(true);
+    lastFocus = document.activeElement;
     U.nextFrame().then(function () {
       backdrop.classList.add('is-in');
       sheet.classList.add('is-in');
       if (opts.onMount) opts.onMount(api);
+      // Move focus into the dialog so screen readers and Tab stay inside it.
+      // Se prefiere el propio diálogo (o un campo de texto) para no dibujar un
+      // anillo de foco sobre un botón que el usuario no ha tocado.
+      if (document.activeElement === document.body || !sheet.contains(document.activeElement)) {
+        // Solo se enfoca un campo si lo pide explícitamente: en móvil, enfocar
+        // un input al abrir una hoja despliega el teclado sin querer.
+        var field = sheet.querySelector('[autofocus]');
+        (field || sheet).focus({ preventScroll: true });
+      }
     });
     return api;
   };

@@ -258,7 +258,18 @@
         stats: await DB.getAll('stats')
       };
       var marks = await DB.getAll('bookmarks');
-      data.bookmarks = marks;
+      // Bookmarks must travel with the portable book hash: local ids are
+      // meaningless on another device (or after a re-import).
+      var idToHash = {};
+      Library.books.forEach(function (b) { idToHash[b.id] = b.hash; });
+      data.bookmarks = marks.map(function (mk) {
+        return {
+          bookHash: idToHash[mk.bookId] || mk.bookHash || '',
+          page: mk.page || 0,
+          note: mk.note || '',
+          createdAt: mk.createdAt || Date.now()
+        };
+      }).filter(function (mk) { return !!mk.bookHash; });
       var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       var name = 'comicverse-backup-' + U.dayKey() + '.json';
       if (WX.available && WX.sendToChat) {
@@ -330,10 +341,16 @@
         }
       });
 
+      var existingMarks = await DB.getAll('bookmarks');
       (data.bookmarks || []).forEach(function (mk) {
         var book = Library.books.find(function (b) { return b.hash === (mk.bookHash || ''); });
         if (!book) return;
-        DB.put('bookmarks', { id: U.uid(), bookId: book.id, page: mk.page || 0, note: mk.note || '', createdAt: mk.createdAt || Date.now() });
+        var page = mk.page || 0;
+        var dupe = existingMarks.some(function (m) { return m.bookId === book.id && m.page === page; });
+        if (dupe) return;
+        var row = { id: U.uid(), bookId: book.id, page: page, note: mk.note || '', createdAt: mk.createdAt || Date.now() };
+        existingMarks.push(row);
+        DB.put('bookmarks', row);
       });
 
       if (Array.isArray(data.stats)) {

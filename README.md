@@ -79,7 +79,7 @@ Comicverse/
 │   └── vendor/             # pdf.js 3.11 + JSZip 3.10 (locales, con sus licencias)
 ├── dev/                    # solo desarrollo: servidor local, simulador webxdc, icono, capturas
 ├── tests/                  # pruebas E2E con Chromium + generador de cómics de ejemplo
-└── docs/screenshots/       # capturas usadas en este README
+└── docs/                   # capturas del README y auditoría técnica (AUDITORIA.md)
 ```
 
 `dev/` y `tests/` **nunca** se empaquetan en el `.xdc`, y `webxdc.js` tampoco: lo inyecta el mensajero.
@@ -99,18 +99,22 @@ El simulador de webxdc permite probar `importFiles`, `sendToChat` y las actualiz
 ```bash
 node tests/make-fixtures.mjs   # genera 2 CBZ (con ComicInfo.xml) + 1 PDF de ejemplo
 node tests/smoke.mjs           # 37 comprobaciones E2E + capturas en tests/shots
+node tests/audit.mjs           # auditoría: red, fugas, memoria, a11y, sync, XSS, escala
 node tests/xdc-test.mjs        # prueba el .xdc empaquetado como lo haría el mensajero
 node dev/docs-shots.mjs        # regenera las capturas de docs/screenshots
 ```
 
-Ambos scripts usan Chromium headless mediante `puppeteer-core` (instalado aparte, fuera del repo).
+Los resultados de la auditoría técnica (17 secciones, hallazgos y correcciones) están en
+[`docs/AUDITORIA.md`](docs/AUDITORIA.md).
+
+Todos los scripts usan Chromium headless mediante `puppeteer-core` (instalado aparte, fuera del repo).
 
 ---
 
 ## Empaquetar
 
 ```bash
-./build.sh                     # → release/comicverse-1.0.0.xdc (~2,2 MB)
+./build.sh                     # → release/comicverse-1.0.1.xdc (~2,2 MB)
 ```
 
 El `.xdc` es un ZIP con `index.html`, `manifest.toml`, `icon.png` y `assets/`. Comparte el archivo en

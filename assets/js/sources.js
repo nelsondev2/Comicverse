@@ -105,6 +105,9 @@
           var file = zip.file(names[index]);
           if (!file) throw new Error('Página no encontrada');
           var blob = await file.async('blob');
+          // La fuente pudo cerrarse mientras se descomprimía: crear la URL
+          // ahora dejaría un blob huérfano para siempre.
+          if (closed) throw new Error('Fuente cerrada');
           blob = blob.slice(0, blob.size, U.imageMimeFor(names[index]));
           var url = URL.createObjectURL(blob);
           urls.set(index, { url: url, size: blob.size });
@@ -113,9 +116,11 @@
           return url;
         },
         rawUrl: async function (index) {
+          if (closed) throw new Error('Fuente cerrada');
           var file = zip.file(names[index]);
           if (!file) throw new Error('Página no encontrada');
           var blob = await file.async('blob');
+          if (closed) throw new Error('Fuente cerrada');
           blob = blob.slice(0, blob.size, U.imageMimeFor(names[index]));
           return URL.createObjectURL(blob);
         },

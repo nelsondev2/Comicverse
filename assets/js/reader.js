@@ -45,9 +45,19 @@
   }
 
   /* ---------------- open / close ---------------- */
-  Reader.open = async function (book, opts) {
-    if (R) await Reader.close({ instant: true });
+  /* Abrir y cerrar se serializan: dos aperturas simultáneas (doble toque,
+     gesto atrás/adelante rápido) creaban dos runtimes y fugaban recursos. */
+  var opChain = Promise.resolve();
+  function enqueue(fn) {
+    var next = opChain.then(fn, fn);
+    opChain = next.catch(function () {});
+    return next;
+  }
+
+  async function openInternal(book, opts) {
+    if (R) await closeInternal({ instant: true });
     opts = opts || {};
+    if (!book) return;
     el = {
       root: U.$('#reader'),
       stage: U.$('#readerStage'),
@@ -98,6 +108,7 @@
       bookmarks: [],
       syncing: false,
       scrollObserver: null,
+      finishedNotified: !!book.finished,
       destroyed: false,
       lastUi: Date.now()
     };
@@ -120,7 +131,11 @@
     el.loading.classList.add('is-on');
     try {
       var row = await DB.get('files', book.id);
-      if (!row || !row.blob) throw new Error('El archivo no está disponible en este dispositivo');
+      if (!row || !row.blob) {
+        var gone = new Error('El archivo no está disponible en este dispositivo');
+        gone.code = 'ENOFILE';
+        throw gone;
+      }
       var source = await Sources.open({ blob: row.blob, name: book.title });
       if (R.destroyed) { source.close(); return; }
       R.source = source;
@@ -135,14 +150,21 @@
       scheduleChromeHide();
       el.stage.focus({ preventScroll: true });
     } catch (err) {
-      console.error('[comicverse] reader', err);
+      // A missing blob is an expected, recoverable state (chat file not yet
+      // downloaded on this device), so it is a warning, not an error.
+      if (err && err.code === 'ENOFILE') console.warn('[comicverse] reader', err.message);
+      else console.error('[comicverse] reader', err);
       el.loading.classList.remove('is-on');
       U.toast(err && err.message ? err.message : 'No se pudo abrir el cómic', 'err');
-      Reader.close({ instant: true });
+      await closeInternal({ instant: true });
     }
+  }
+
+  Reader.open = function (book, opts) {
+    return enqueue(function () { return openInternal(book, opts); });
   };
 
-  Reader.close = async function (opts) {
+  async function closeInternal(opts) {
     opts = opts || {};
     if (!R) {
       el.root && (el.root.hidden = true);
@@ -155,7 +177,8 @@
     if (runtime.chromeTimer) clearTimeout(runtime.chromeTimer);
     stopSessionTimer();
     releaseWakeLock();
-    if (runtime.scrollObserver) runtime.scrollObserver.disconnect();
+    if (runtime.scrollObserver) { runtime.scrollObserver.disconnect(); runtime.scrollObserver = null; }
+    runtime.scrollFallback = null;
 
     await persistSession(runtime);
     if (runtime.source) { try { runtime.source.close(); } catch (e) {} }
@@ -164,6 +187,7 @@
     el.root.setAttribute('aria-hidden', 'true');
     el.root.classList.remove('is-immersive');
     el.scroll.hidden = true;
+    if (el.scroll) el.scroll.textContent = '';   // libera los <img> de la tira
     el.paged.hidden = false;
     el.layerA.innerHTML = '<div class="zoom"><div class="page-holder"></div></div>';
     el.layerB.innerHTML = '<div class="zoom"><div class="page-holder"></div></div>';
@@ -183,6 +207,10 @@
     if (!opts.startPage && runtime.book) {
       maybeSyncProgress(runtime.book);
     }
+  }
+
+  Reader.close = function (opts) {
+    return enqueue(function () { return closeInternal(opts); });
   };
 
   /* ---------------- rendering ---------------- */
@@ -618,6 +646,8 @@
     el.scroll.hidden = false;
     el.scroll.innerHTML = '';
     el.scroll.scrollTop = 0;
+    R.scrollFallback = null;
+    if (R.scrollObserver && R.scrollObserver.disconnect) { R.scrollObserver.disconnect(); R.scrollObserver = null; }
     var stage = stageSize();
     var aspectHint = R.book.aspect || 1.5;
 
@@ -669,13 +699,9 @@
           }
         });
       };
-      el.scroll.addEventListener('scroll', renderVisible, { passive: true });
-      R.scrollFallback = renderVisible;
+      R.scrollFallback = renderVisible;   // invoked by the persistent listener in initUi
       renderVisible();
     }
-
-    el.scroll.addEventListener('scroll', onScroll, { passive: true });
-    el.scroll.addEventListener('scroll', updateScrollPageFromView, { passive: true });
 
     await U.nextFrame();
     if (token !== scrollBuildToken) return;
@@ -737,6 +763,16 @@
     if (smooth) el.scroll.scrollTo({ top: top, behavior: 'smooth' });
     else el.scroll.scrollTop = top;
     R.page = index;
+    // Un desplazamiento suave tarda varios cientos de ms: hasta que termina,
+    // los eventos «scroll» recalcularían la página y desharían el salto.
+    if (smooth) {
+      R.scrollJump = { page: index, until: Date.now() + 900 };
+      setTimeout(function () {
+        if (R && R.scrollJump && Date.now() >= R.scrollJump.until) R.scrollJump = null;
+      }, 950);
+    } else {
+      R.scrollJump = null;
+    }
   }
 
   var scrollRaf = null;
@@ -754,6 +790,13 @@
     if (!R || R.mode !== 'scroll') return;
     var blocks = el.scroll.querySelectorAll('.scroll-page');
     if (!blocks.length) return;
+    var jump = R.scrollJump;
+    if (jump && Date.now() < jump.until) {
+      // Durante el salto animado mantenemos la página pedida por el usuario.
+      if (R.page !== jump.page) { R.page = jump.page; updatePageUi(); updateBookmarkButton(); }
+      return;
+    }
+    if (jump) R.scrollJump = null;
     var mid = el.scroll.scrollTop + el.scroll.clientHeight / 2;
     var best = 0, bestDist = Infinity;
     for (var i = 0; i < blocks.length; i++) {
@@ -1560,6 +1603,8 @@
     if (!R) return;
     if (!WX.available || !App.settings.syncProgress) return;
     if (finished) {
+      if (R.finishedNotified) return;   // una sola vez, no en cada cambio de página
+      R.finishedNotified = true;
       WX.sendNow({
         type: 'finished',
         book: R.book.hash,
@@ -1595,6 +1640,13 @@
       layerB: U.$('.page-layer[data-layer="b"]'),
       brightness: U.$('#readerBrightness')
     };
+    // Bound once for the lifetime of the reader: the strip is never replaced,
+    // only its children, so per-build listeners would pile up.
+    el.scroll.addEventListener('scroll', onScroll, { passive: true });
+    el.scroll.addEventListener('scroll', updateScrollPageFromView, { passive: true });
+    el.scroll.addEventListener('scroll', function () {
+      if (R && typeof R.scrollFallback === 'function') R.scrollFallback();
+    }, { passive: true });
     initUi();
   };
 

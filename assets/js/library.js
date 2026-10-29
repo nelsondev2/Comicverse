@@ -867,9 +867,8 @@
       applyLayoutIcon();
       Library.render();
     });
-    U.$('.appbar').addEventListener('click', function (e) {
-      if (e.target.closest('[data-import]')) Library.importFiles();
-    });
+    // Single delegated trigger for every [data-import] control (FAB, empty state,
+    // onboarding). Adding local handlers as well caused a double file picker.
     document.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-import]');
       if (btn) { e.preventDefault(); Library.importFiles(); }

@@ -71,7 +71,10 @@ await sleep(4200); // let the import toast fade out
 
 // give the library some life: progress, a favourite, a collection
 await page.evaluate(async () => {
-  const [a, b, c] = Library.books;
+  const byName = (needle) => Library.books.find((b) => b.title.toLowerCase().includes(needle));
+  const a = byName('neón');
+  const b = byName('observador');
+  const c = byName('sombras');
   a.page = 6; a.lastReadAt = Date.now() - 1000;
   b.page = 3; b.lastReadAt = Date.now() - 90000;
   c.favorite = true;
