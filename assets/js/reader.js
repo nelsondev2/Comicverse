@@ -240,7 +240,7 @@
     var zoom = layer.querySelector('.zoom');
 
     holder.classList.toggle('is-spread', pages.length > 1);
-    holder.innerHTML = '';
+    holder.textContent = '';
 
     var items = [];
     for (var i = 0; i < pages.length; i++) {
@@ -301,6 +301,12 @@
         box.appendChild(miss);
       }
       holder.appendChild(box);
+    }
+    if (pages.length > 1 && R.dir === 'rtl') {
+      // manga: the earlier page sits on the right, so the DOM order is reversed
+      var kids = Array.prototype.slice.call(holder.children).reverse();
+      holder.textContent = '';
+      kids.forEach(function (k) { holder.appendChild(k); });
     }
 
     // position/scale the zoom canvas
@@ -502,7 +508,29 @@
     saveProgressThrottled();
     updateBookmarkButton();
     updateModeIcon();
+    preloadNeighbours();
     if (R.mode === 'scroll' && R.source) pinNearbyScrollPages();
+  }
+
+  /** Decode/cache the adjacent pages so page turns feel instant. */
+  var preloadTimer = null;
+  function preloadNeighbours() {
+    if (!R || !R.source || R.source.type !== 'cbz') return;
+    if (preloadTimer) clearTimeout(preloadTimer);
+    preloadTimer = setTimeout(function () {
+      preloadTimer = null;
+      if (!R || !R.source) return;
+      var total = R.source.pageCount;
+      var forward = R.dir === 'rtl' ? [-1, -2, 1] : [1, 2, -1];
+      var indices = [];
+      (R.mode === 'double' ? [spreadStep(R.page, 1), spreadStep(R.page, -1)] : forward).forEach(function (i) {
+        if (i >= 0 && i < total && indices.indexOf(i) === -1) indices.push(i);
+      });
+      R.source.pin(indices.concat([R.page, R.page + 1, R.page - 1]));
+      indices.forEach(function (i) {
+        try { R.source.urlFor(i); } catch (e) { /* ignore */ }
+      });
+    }, 90);
   }
 
   var progressTimer = null;

@@ -428,6 +428,7 @@
         '<button class="btn btn--primary" data-act="read">' + U.icon('library') + (book.page > 0 && !book.finished ? 'Continuar' : 'Leer') + '</button>' +
         '<button class="btn btn--ghost" data-act="fav" aria-label="Favorito">' + U.icon('heart') + '</button>' +
         '<button class="btn btn--ghost" data-act="export" aria-label="Compartir">' + U.icon('share') + '</button>' +
+        '<button class="btn btn--ghost" data-act="more" aria-label="Más opciones">' + U.icon('more') + '</button>' +
       '</div>' +
       '<div class="field"><label class="field__label" for="dt-title">Título</label><input class="input" id="dt-title" value="' + U.escape(book.title) + '"></div>' +
       '<div class="field-row">' +
@@ -560,6 +561,9 @@
         act.style.color = book.favorite ? '#ec4899' : '';
       } else if (kind === 'export') {
         exportBook(book);
+      } else if (kind === 'more') {
+        sheet.close();
+        setTimeout(function () { openQuickActions(book.id); }, 160);
       } else if (kind === 'finished') {
         toggleFinished(book);
         sheet.close();
