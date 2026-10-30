@@ -1383,6 +1383,19 @@
       b.addEventListener('click', function () { sheet.close(); setTimeout(fn, 80); });
       content.appendChild(b);
     }
+    var neighbours = Library.volumeNeighbours ? Library.volumeNeighbours(R.book) : { prev: null, next: null };
+    if (neighbours.prev) {
+      item('back', 'Tomo anterior', neighbours.prev.title, function () {
+        var target = neighbours.prev;
+        Reader.close().then(function () { Reader.open(target); });
+      });
+    }
+    if (neighbours.next) {
+      item('chevron', 'Siguiente tomo', neighbours.next.title, function () {
+        var target = neighbours.next;
+        Reader.close().then(function () { Reader.open(target); });
+      });
+    }
     item('thumbs', 'Miniaturas', 'Ir a una página', openThumbnails);
     item('bookmark', R.bookmarks.some(function (m) { return m.page === R.page; }) ? 'Quitar marcador' : 'Marcar esta página', 'Página ' + (R.page + 1), function () { Reader.toggleBookmark(); });
     item('fit-page', 'Ajustes de lectura', 'Modo, brillo, fondo…', openReaderSettings);

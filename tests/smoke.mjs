@@ -228,24 +228,74 @@ check('pdf scroll renders', (await evalJs(() => document.querySelectorAll('.scro
 await evalJs(() => Reader.close());
 await sleep(1200);
 
-console.log('\n== shelves / stats / settings ==');
-await evalJs(() => App.setTab('shelves'));
-await sleep(700);
-await shot('22-shelves');
-check('smart shelves present', (await evalJs(() => document.querySelectorAll('.shelf-card').length)) >= 3);
-await evalJs(() => Library.createCollection());
+console.log('\n== libraries (playlists) / stats / settings ==');
+await evalJs(() => App.setTab('library'));
+await sleep(500);
+await evalJs(() => { Library.createLibrary(); });
 await sleep(600);
 await evalJs(() => {
   const i = document.querySelector('.sheet input');
   if (i) { i.value = 'Manga'; i.dispatchEvent(new Event('input', { bubbles: true })); }
-  const b = [...document.querySelectorAll('.sheet .btn')].find((x) => /Guardar/.test(x.textContent));
+  const b = [...document.querySelectorAll('.sheet .btn')].find((x) => /Crear|Guardar/.test(x.textContent));
   if (b) b.click();
 });
 await sleep(900);
-check('collection created', (await evalJs(() => Library.collections.length)) === 1);
-await evalJs(() => { Library.books[0].collections = [Library.collections[0].id]; DB.put('books', Library.books[0]); App.renderShelves(); });
+check('library (playlist) created', (await evalJs(() => Library.collections.length)) === 1);
+check('library appears in rail', (await evalJs(() => document.querySelectorAll('.lib-card[data-library]').length)) === 1);
+await evalJs(() => Library.openLibrary(Library.collections[0].id));
 await sleep(500);
-await shot('23-shelves-collection');
+check('empty library shows its own header', await evalJs(() => !document.querySelector('#libraryHeader').hidden));
+await shot('22-library-empty');
+await evalJs(() => { Library.books[0].collections = [Library.collections[0].id]; DB.put('books', Library.books[0]); Library.render(); });
+await sleep(500);
+await shot('23-library-inside');
+check('book listed inside library', (await evalJs(() => document.querySelectorAll('.book-card').length)) === 1);
+await evalJs(() => Library.closeLibrary());
+await sleep(400);
+
+console.log('\n== series / volumes ==');
+const series = await evalJs(async () => {
+  const originals = Library.books.slice();
+  const blob = Library.books[0];
+  Library.books = [1, 2, 3].map((n) => Object.assign({}, blob, {
+    id: 'vol-' + n, hash: 'volh-' + n, title: 'One Piece #' + n, series: 'One Piece',
+    number: String(n), collections: [], page: n, finished: false
+  }));
+  Library.render();
+  await new Promise((r) => setTimeout(r, 200));
+  const nb = Library.volumeNeighbours(Library.books[1]);
+  await Library.openDetails('vol-2');
+  await new Promise((r) => setTimeout(r, 600));
+  const rows = [...document.querySelectorAll('.volume-row')].map((r) => r.querySelector('.volume-row__num').textContent);
+  U.closeAllSheets();
+  Library.books = originals;
+  Library.render();
+  return { prev: nb.prev && nb.prev.title, next: nb.next && nb.next.title, rows };
+});
+check('series neighbours resolved', series.prev === 'One Piece #1' && series.next === 'One Piece #3', series);
+check('volume list rendered in details', series.rows.join(',') === '1,2,3', series.rows);
+
+console.log('\n== alphabetical order ==');
+const alpha = await evalJs(async () => {
+  const originals = Library.books.slice();
+  const base = Library.books[0];
+  Library.books = ['Ñandú', 'bleach', 'Akira', 'Ángeles', '20th Century Boys'].map((t, i) =>
+    Object.assign({}, base, { id: 'alpha-' + i, hash: 'alpha' + i, title: t, collections: [] }));
+  Library.state.sort = 'title';
+  Library.render();
+  await new Promise((r) => setTimeout(r, 200));
+  const asc = [...document.querySelectorAll('.book-card__title')].map((n) => n.textContent);
+  Library.state.sort = 'titleDesc';
+  Library.render();
+  await new Promise((r) => setTimeout(r, 200));
+  const desc = [...document.querySelectorAll('.book-card__title')].map((n) => n.textContent);
+  Library.state.sort = 'title';
+  Library.books = originals;
+  Library.render();
+  return { asc, desc };
+});
+check('A–Z natural order', alpha.asc.join('|') === '20th Century Boys|Akira|Ángeles|bleach|Ñandú', alpha.asc);
+check('Z–A mirrors A–Z', alpha.desc.join('|') === alpha.asc.slice().reverse().join('|'), alpha.desc);
 
 await evalJs(() => App.setTab('stats'));
 await sleep(900);

@@ -41,14 +41,139 @@
   };
 
   /* ================= CBZ ================= */
+  function isPagePath(path) {
+    if (/^__MACOSX\//i.test(path)) return false;
+    if (/(^|\/)\.[^/]*$/.test(path)) return false;
+    return U.isImageName(path);
+  }
+
+  function makeUrlCache(readBlob, pinnedRef) {
+    var urls = new Map();
+    var order = [];
+    var closed = false;
+
+    function evict(keep) {
+      while (order.length > URL_CACHE_LIMIT) {
+        var removed = false;
+        for (var i = 0; i < order.length; i++) {
+          var idx = order[i];
+          if (idx === keep || pinnedRef()[idx]) continue;
+          var row = urls.get(idx);
+          if (row) { URL.revokeObjectURL(row.url); urls.delete(idx); }
+          order.splice(i, 1);
+          removed = true;
+          break;
+        }
+        if (!removed) break;
+      }
+    }
+
+    return {
+      isClosed: function () { return closed; },
+      urlFor: async function (index) {
+        if (closed) throw new Error('Fuente cerrada');
+        var hit = urls.get(index);
+        if (hit) {
+          var pos = order.indexOf(index);
+          if (pos >= 0) { order.splice(pos, 1); order.push(index); }
+          return hit.url;
+        }
+        var blob = await readBlob(index);
+        if (closed) throw new Error('Fuente cerrada');
+        var url = URL.createObjectURL(blob);
+        urls.set(index, { url: url, size: blob.size });
+        order.push(index);
+        evict(index);
+        return url;
+      },
+      clear: function () {
+        closed = true;
+        urls.forEach(function (row) { URL.revokeObjectURL(row.url); });
+        urls.clear(); order.length = 0;
+      }
+    };
+  }
+
   function openCbz(opts) {
+    return openCbzLazy(opts.blob).catch(function (err) {
+      if (err && err.fatal) throw err;
+      if (global.LazyZip && global.LazyZip.supported) {
+        console.warn('[comicverse] lector ZIP diferido no disponible, usando JSZip:', err && err.message);
+      }
+      return openCbzJsZip(opts);
+    });
+  }
+
+  /* Camino rápido: solo lee el índice del ZIP y descomprime cada página al
+     pedirla. Abrir un tomo de 300 MB pasa de segundos a milisegundos. */
+  async function openCbzLazy(blob) {
+    if (!global.LazyZip || !global.LazyZip.supported) throw new Error('lector no disponible');
+    var zip = await global.LazyZip.open(blob);
+    var names = zip.names.filter(isPagePath).sort(U.naturalCompare);
+    if (!names.length) {
+      // Un CBZ sin imágenes es un error de formato, no un fallo del lector:
+      // no tiene sentido reintentar con JSZip.
+      var err = new Error('El archivo CBZ no contiene imágenes');
+      err.fatal = true;
+      throw err;
+    }
+    var infoEntry = zip.names.filter(function (n) { return /comicinfo\.xml$/i.test(n); })[0];
+    var readMeta = infoEntry ? zip.readText(zip.entry(infoEntry)).then(parseComicInfo).catch(function () { return null; }) : null;
+
+    var pinned = {};
+    var cache = makeUrlCache(function (index) {
+      var entry = zip.entry(names[index]);
+      if (!entry) throw new Error('Página no encontrada');
+      return zip.readBlob(entry, U.imageMimeFor(names[index]));
+    }, function () { return pinned; });
+
+    var source = {
+      type: 'cbz',
+      lazy: true,
+      pageCount: names.length,
+      metaPromise: readMeta || Promise.resolve(null),
+      entries: names,
+      urlFor: cache.urlFor,
+      blobFor: function (index) {
+        var entry = zip.entry(names[index]);
+        if (!entry) return Promise.reject(new Error('Página no encontrada'));
+        return zip.readBlob(entry, U.imageMimeFor(names[index]));
+      },
+      rawUrl: async function (index) {
+        var entry = zip.entry(names[index]);
+        if (!entry) throw new Error('Página no encontrada');
+        var b = await zip.readBlob(entry, U.imageMimeFor(names[index]));
+        return URL.createObjectURL(b);
+      },
+      pin: function (indices) {
+        pinned = {};
+        (indices || []).forEach(function (i) { pinned[i] = true; });
+      },
+      pageSize: function (index) {
+        return cache.urlFor(index).then(function (url) {
+          return new Promise(function (resolve) {
+            var img = new Image();
+            img.onload = function () { resolve({ width: img.naturalWidth, height: img.naturalHeight, url: url }); };
+            img.onerror = function () { resolve({ width: 1000, height: 1500, url: url }); };
+            img.src = url;
+          });
+        });
+      },
+      close: function () {
+        cache.clear();
+        zip = null;
+      }
+    };
+    return source;
+  }
+
+  function openCbzJsZip(opts) {
     if (!global.JSZip) return Promise.reject(new Error('No se pudo cargar el lector de ZIP'));
     return global.JSZip.loadAsync(opts.blob, { createFolders: false }).then(function (zip) {
       var names = [];
       zip.forEach(function (path, entry) {
         if (entry.dir) return;
-        if (/^__MACOSX\//i.test(path) || /(^|\/)\./.test(path)) return;
-        if (!U.isImageName(path)) return;
+        if (!isPagePath(path)) return;
         names.push(path);
       });
       names.sort(U.naturalCompare);
@@ -68,59 +193,34 @@
         }
       }
 
-      var urls = new Map();
-      var order = [];
       var pinned = {};
-      var closed = false;
-
-      function evictIfNeeded(keep) {
-        while (order.length > URL_CACHE_LIMIT) {
-          var removed = false;
-          for (var i = 0; i < order.length; i++) {
-            var idx = order[i];
-            if (idx === keep || pinned[idx]) continue;
-            var row = urls.get(idx);
-            if (row) { URL.revokeObjectURL(row.url); urls.delete(idx); }
-            order.splice(i, 1);
-            removed = true;
-            break;
-          }
-          if (!removed) break;
-        }
-      }
+      var cache = makeUrlCache(function (index) {
+        var file = zip.file(names[index]);
+        if (!file) throw new Error('Página no encontrada');
+        return file.async('blob').then(function (blob) {
+          return blob.slice(0, blob.size, U.imageMimeFor(names[index]));
+        });
+      }, function () { return pinned; });
 
       var source = {
         type: 'cbz',
         pageCount: names.length,
         metaPromise: readMeta || Promise.resolve(null),
         entries: names,
-        urlFor: async function (index) {
-          if (closed) throw new Error('Fuente cerrada');
-          var hit = urls.get(index);
-          if (hit) {
-            var pos = order.indexOf(index);
-            if (pos >= 0) { order.splice(pos, 1); order.push(index); }
-            return hit.url;
-          }
+        urlFor: cache.urlFor,
+        blobFor: function (index) {
           var file = zip.file(names[index]);
-          if (!file) throw new Error('Página no encontrada');
-          var blob = await file.async('blob');
-          // La fuente pudo cerrarse mientras se descomprimía: crear la URL
-          // ahora dejaría un blob huérfano para siempre.
-          if (closed) throw new Error('Fuente cerrada');
-          blob = blob.slice(0, blob.size, U.imageMimeFor(names[index]));
-          var url = URL.createObjectURL(blob);
-          urls.set(index, { url: url, size: blob.size });
-          order.push(index);
-          evictIfNeeded(index);
-          return url;
+          if (!file) return Promise.reject(new Error('Página no encontrada'));
+          return file.async('blob').then(function (blob) {
+            return blob.slice(0, blob.size, U.imageMimeFor(names[index]));
+          });
         },
         rawUrl: async function (index) {
-          if (closed) throw new Error('Fuente cerrada');
+          if (cache.isClosed()) throw new Error('Fuente cerrada');
           var file = zip.file(names[index]);
           if (!file) throw new Error('Página no encontrada');
           var blob = await file.async('blob');
-          if (closed) throw new Error('Fuente cerrada');
+          if (cache.isClosed()) throw new Error('Fuente cerrada');
           blob = blob.slice(0, blob.size, U.imageMimeFor(names[index]));
           return URL.createObjectURL(blob);
         },
@@ -129,7 +229,7 @@
           (indices || []).forEach(function (i) { pinned[i] = true; });
         },
         pageSize: function (index) {
-          return source.urlFor(index).then(function (url) {
+          return cache.urlFor(index).then(function (url) {
             return new Promise(function (resolve) {
               var img = new Image();
               img.onload = function () { resolve({ width: img.naturalWidth, height: img.naturalHeight, url: url }); };
@@ -139,9 +239,7 @@
           });
         },
         close: function () {
-          closed = true;
-          urls.forEach(function (row) { URL.revokeObjectURL(row.url); });
-          urls.clear(); order.length = 0;
+          cache.clear();
           try { zip = null; } catch (e) {}
         }
       };
@@ -169,6 +267,7 @@
         year: txt('Year') || txt('SeriesStartYear'),
         summary: txt('Summary'),
         genre: txt('Genre'),
+        manga: txt('Manga'),
         pageCount: txt('PageCount'),
         language: txt('LanguageISO'),
         web: txt('Web')

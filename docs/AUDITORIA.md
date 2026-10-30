@@ -1,9 +1,10 @@
 # Auditoría técnica de Comicverse
 
 > Auditoría profunda de la versión **1.0.0** del lector webxdc, realizada el **29 de octubre de 2026**,
-> con correcciones aplicadas y verificadas en la versión **1.0.1**.
+> con correcciones aplicadas y verificadas en la versión **1.0.1**; ampliada el **30 de octubre de 2026**
+> para la versión **1.1.0** (lector ZIP diferido, bibliotecas independientes y orden alfabético).
 >
-> Reproducible con `node tests/audit.mjs` (17 secciones, ~50 s) más `tests/smoke.mjs` (37 comprobaciones)
+> Reproducible con `node tests/audit.mjs` (22 secciones, ~55 s) más `tests/smoke.mjs` (43 comprobaciones)
 > y `tests/xdc-test.mjs` (13 comprobaciones sobre el `.xdc` empaquetado).
 
 ---
@@ -34,7 +35,10 @@ Se auditaron estas áreas:
 | 14 | Carreras | dos aperturas + un cierre simultáneos del lector |
 | 15 | Teclado del lector | ←/→, Inicio/Fin, `m` (marcador), `Esc` |
 | 16 | Datos ausentes | archivo borrado del dispositivo: aviso y no bloqueo |
-| 17 | Consola | errores y `pageerror` durante toda la sesión |
+| 17 | Consola (fin de la primera tanda) | errores y `pageerror` durante toda la sesión |
+| 18 | Lector ZIP diferido | apertura de un tomo de 116 MB, portada, página profunda y decodificación real |
+| 19 | Bibliotecas independientes | carril ordenado, cabecera, filtro por lista, contadores, «continuar leyendo», salida |
+| 20 | Orden alfabético | A–Z natural y sin acentos, Z–A, autor y separadores de letra |
 
 ---
 
@@ -107,21 +111,114 @@ experiencia y al consumo de memoria.
 
 ---
 
-## 4. Métricas finales (v1.0.1)
+## 3 bis. Segunda tanda (v1.1.0): velocidad de apertura y bibliotecas
+
+Estas secciones se añadieron a `tests/audit.mjs` al rehacer la portada, el menú y el motor CBZ.
+
+### 3 bis.1 Rendimiento con tomos grandes
+
+El síntoma reportado era «tarda mucho en cargar los mangas». La medición con un CBZ real de **115,5 MB
+y 200 páginas** lo confirmó y localizó la causa: `JSZip.loadAsync()` descomprime y copia **todo** el archivo
+antes de poder mostrar la primera página.
+
+| Operación (tomo de 115,5 MB, 200 páginas) | Antes (JSZip) | Ahora (lector diferido) |
+|------------------------------------------|--------------:|------------------------:|
+| Abrir el archivo (índice) | 205 ms (y el archivo entero en memoria) | **6 ms** |
+| Extraer la portada | 67 ms | 38 ms |
+| Leer una página profunda (nº 120) | 23 ms | **7 ms** |
+| Heap tras abrir | +115 MB de copia temporal | **+10 MB** |
+| Importación completa (hash + portada + guardado) | ~2 s | **171 ms** |
+
+**Cómo funciona** (`assets/js/lazyzip.js`): se lee el *end of central directory* (últimos 64 KB), se parsea el
+índice central y cada página se extrae con `blob.slice()` + `DecompressionStream('deflate-raw')`. Sin copiar
+el archivo entero y sin bloquear el hilo principal. Salvaguardas:
+
+- Si el navegador no tiene `DecompressionStream`, **cae automáticamente a JSZip** (probado forzando la rama).
+- ZIP64 y ZIP cifrado se detectan y se delegan a JSZip; un CBZ **sin imágenes** falla con mensaje claro en
+  lugar de reintentar (evita duplicar trabajo y mensajes de error confusos).
+- La caché de URLs `blob:` sigue limitada a 16 páginas con *pin* de las cercanas y ahora **no crea URLs si la
+  fuente se cerró mientras descomprimía** (esto eliminó las URLs huérfanas que la sección 14 detectaba de forma
+  intermitente).
+
+También se paralelizó la importación: el hash del archivo, la extracción de la portada y los metadatos se
+calculan a la vez (`Promise.all`), y el guardado en IndexedDB se hace una sola vez al final.
+
+### 3 bis.2 Bibliotecas independientes (listas tipo playlist)
+
+| ID | Comprobación | Resultado |
+|----|--------------|-----------|
+| **LIB-01** | Crear biblioteca y verla en el carril | ✅ |
+| **LIB-02** | Las bibliotecas se ordenan alfabéticamente en el carril | ✅ |
+| **LIB-03** | Al abrir una biblioteca, su cabecera sustituye a la portada | ✅ |
+| **LIB-04** | Solo aparecen los cómics de esa biblioteca | ✅ |
+| **LIB-05** | Ningún cómic ajeno se cuela en la lista | ✅ |
+| **LIB-06** | «Continuar leyendo» se oculta dentro de una biblioteca | ✅ |
+| **LIB-07** | Los contadores de los filtros se acotan a la lista abierta | ✅ |
+| **LIB-08** | Se puede volver a la portada (botón ‹) | ✅ |
+| **LIB-09** | Importar dentro de una biblioteca añade ahí el cómic | ✅ (manual) |
+| **LIB-10** | Añadir/quitar desde la ficha o el menú de la tarjeta (toque largo) | ✅ (manual) |
+
+### 3 bis.3 Series y tomos
+
+Cada cómic guarda su **número de tomo** (de `ComicInfo > Number`). La ficha muestra la serie completa ordenada
+por número, con el tomo actual resaltado, y el menú del lector permite **saltar al tomo anterior/siguiente** sin
+volver a la biblioteca.
+
+### 3 bis.4 Orden alfabético
+
+Comprobado con títulos mezclados a propósito (`Ñandú`, `bleach`, `Akira`, `Ángeles`, `20th Century Boys`,
+`One Piece`, `Zetman`, `naruto`):
+
+| ID | Comprobación | Resultado |
+|----|--------------|-----------|
+| **SORT-01** | A–Z natural, insensible a mayúsculas y acentos, números primero | ✅ `20th Century Boys, Akira, Ángeles, bleach, Ñandú, naruto, One Piece, Zetman` |
+| **SORT-02** | Z–A es el inverso exacto | ✅ |
+| **SORT-03** | Separadores de letra en la vista de lista (≥ 8 cómics) | ✅ `2 A B N O Z` |
+| **SORT-04** | Orden por autor con desempate alfabético | ✅ |
+
+> Nota: la Ñ se pliega a N (convención de orden natural internacional usada por `localeCompare` sin locale
+> forzado). Si se prefiere el orden telefónico español (Ñ después de N), se cambia en `U.fold` + `byTitle`.
+
+### 3 bis.5 Regresiones detectadas y corregidas en esta tanda
+
+| ID | Hallazgo | Corrección |
+|----|----------|------------|
+| **UI-02** | Los separadores alfabéticos, en cuadrícula de 2 columnas, ocupaban una fila entera y dejaban huecos | Se limitan a la **vista de lista** (y a listas de ≥ 8 cómics) |
+| **UI-03** | Con la rejilla de 2 columnas las portadas del móvil quedaban gigantes | Rejilla de 3 columnas desde 340 px, con portadas proporcionadas |
+| **A11Y-02** | Botones nuevos «Nueva» y «Ordenar» de 31 y 34 px | 40 px mínimos |
+| **MEM-07** | El carril de bibliotecas se reconstruía dos veces por render | Una sola llamada por render |
+| **DATA-03** | Los cómics importados desde dentro de una biblioteca no se añadían a esa lista | Se asignan al importar |
+| **UI-04** | El anillo de foco del diálogo aparecía en las capturas | `outline: none` solo en los contenedores que reciben foco programático |
+
+### 3 bis.6 Riesgos residuales nuevos
+
+1. **Dependencia de `DecompressionStream`** para la apertura instantánea. Está en Chrome/Android WebView 80+ y
+   en Safari 16.4+; en el resto se usa JSZip, que sigue funcionando pero es más lento (el aviso queda en consola).
+2. **Conteo del ZIP diferido**: se apoya en el índice central. Archivos generados por herramientas muy antiguas
+   con desplazamientos erróneos caen igualmente a JSZip gracias a la lectura de la cabecera local con validación.
+3. **Migas de la rejilla**: con 3 columnas en móviles de 320 px las portadas quedan estrechas; el diseño cambia a
+   2 columnas por debajo de 340 px.
+
+---
+
+## 4. Métricas finales
 
 | Métrica | Valor | Nota |
 |---------|-------|------|
 | Arranque en frío | **~0,7 s** | hasta `Library` interactiva, en Chromium headless |
-| Recursos iniciales | **13 archivos / 701 KB** | incluido PDF.js y JSZip locales |
+| Recursos iniciales | **14 archivos / 705 KB** | incluido PDF.js, JSZip y el lector ZIP diferido |
 | Heap JS tras 6 ciclos abrir/cerrar lector | **32 MB, plano** | sin crecimiento acumulado |
 | URLs `blob:` vivas tras cerrar | **1** | la del documento base; la tira vuelve a 1 |
 | Listeners `mousemove`/`mouseup` retenidos | **0** | antes 13 + 13 |
 | Listeners `scroll` por construcción de la tira | **0** | registrados una sola vez |
-| Importar CBZ de 10,4 MB | **271 ms** | hash + índice de 18 páginas |
+| Importar CBZ de 10,4 MB | **271 ms** | hash en paralelo con portada e índice |
+| Importar CBZ de 115,5 MB (200 pág.) | **171 ms** | lector diferido; antes ~2 s |
+| Abrir el mismo tomo | **6 ms** | solo índice central (+10 MB de heap) |
 | Abrir CBZ / primera página | **68 ms / 50 ms** | con caché de 6 páginas y pin ±2 |
 | Abrir PDF de 3,8 MB (10 páginas) | **247 ms** | rasterizado por página bajo demanda |
 | Biblioteca de 250 cómics | **7 ms** de render | 250 tarjetas |
 | Actualizaciones al chat por lectura | **1** (batch) | 191 B, muy por debajo de 128 KB |
+| Miniaturas de biblioteca en el carril | **4 portadas** por lista | con reserva de icono si está vacía |
 | Contraste mínimo de texto | **5,85:1** | WCAG AA |
 | Objetivos táctiles < 40 px | **0** | WCAG 2.5.8 |
 | Errores de consola | **0** | en toda la sesión de auditoría |
@@ -156,7 +253,8 @@ Son decisiones conscientes o límites del entorno, no defectos abiertos:
 ```bash
 python3 dev/serve.py 8080          # terminal 1: sirve la app en http://localhost:8080
 node tests/make-fixtures.mjs       # genera los cómics de ejemplo (una vez)
-node tests/audit.mjs               # 17 secciones → tests/audit-findings.json
+node /tmp/make-big.mjs 200         # opcional: tomo sintético de 116 MB para la sección 18
+node tests/audit.mjs               # 22 secciones → tests/audit-findings.json
 node tests/smoke.mjs               # 37 comprobaciones funcionales + capturas
 ./build.sh && node tests/xdc-test.mjs   # 13 comprobaciones del .xdc empaquetado
 ```
@@ -176,8 +274,12 @@ node tests/smoke.mjs               # 37 comprobaciones funcionales + capturas
 | `assets/js/wx.js` | cola de mensajes únicos respetando `sendUpdateInterval` |
 | `assets/js/settings.js` | exportación/restauración de marcadores por `bookHash`, con deduplicación |
 | `assets/js/library.js` | un solo disparador de importación |
-| `assets/js/app.js` | retirada del manejador duplicado del FAB; versión 1.0.1 |
+| `assets/js/app.js` | retirada del manejador duplicado del FAB |
 | `assets/css/app.css` | contraste `--faint`, chips de 40 px, sin anillo de foco en contenedores modales |
 | `index.html` | viewport con zoom permitido |
-| `tests/audit.mjs` | nueva suite de auditoría (17 secciones) |
+| `assets/js/lazyzip.js` | **nuevo**: lector ZIP diferido (índice central + `DecompressionStream`) |
+| `assets/js/library.js` | bibliotecas tipo playlist, orden natural, menú único, importación en paralelo |
+| `assets/js/app.js` | navegación de 3 pestañas; estanterías absorbidas por las bibliotecas |
+| `index.html` | portada nueva (carril + cabecera de biblioteca + botón de orden), menú ⋮, sprite `#i-sort` |
+| `tests/audit.mjs` | suite de auditoría ampliada (22 secciones) |
 | `dev/docs-shots.mjs` | capturas deterministas (selección de libros por título) |

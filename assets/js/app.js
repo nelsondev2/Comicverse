@@ -1,9 +1,9 @@
-/* Comicverse — application shell, navigation, shelves and boot */
+/* Comicverse — application shell, navigation and boot */
 (function (global) {
   'use strict';
 
   var App = {
-    VERSION: '1.0.1',
+    VERSION: '1.1.0',
     settings: {
       theme: 'dark',
       accent: 'violet',
@@ -64,7 +64,7 @@
 
   /* ---------------- navigation ---------------- */
   App.setTab = function (tab) {
-    if (tab === App.currentTab && tab !== 'settings' && tab !== 'stats' && tab !== 'shelves') {
+    if (tab === App.currentTab && tab !== 'settings' && tab !== 'stats') {
       global.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
@@ -80,146 +80,22 @@
     var fab = U.$('#fabImport');
     if (fab) fab.hidden = tab === 'settings';
     global.scrollTo({ top: 0 });
-    if (tab === 'shelves') App.renderShelves();
     if (tab === 'stats') App.renderStats();
     if (tab === 'settings') Settings.render();
     if (tab === 'library') Library.render();
     var appbar = U.$('.appbar');
     if (appbar) {
-      var searchBtn = U.$('#btnSearch'), layoutBtn = U.$('#btnLayout');
+      var searchBtn = U.$('#btnSearch'), menuBtn = U.$('#btnMenu');
       var showTools = tab === 'library';
-      searchBtn.style.display = showTools ? '' : 'none';
-      layoutBtn.style.display = showTools ? '' : 'none';
+      if (searchBtn) searchBtn.style.display = showTools ? '' : 'none';
+      if (menuBtn) menuBtn.style.display = showTools ? '' : 'none';
       if (!showTools) Library.hideSearch();
     }
   };
 
-  /* ---------------- shelves ---------------- */
-  App.renderShelves = function () {
-    var list = U.$('#shelfList');
-    var smartList = U.$('#smartList');
-    var empty = U.$('#shelfEmpty');
-    var summary = U.$('#shelfSummary');
-    if (!list || !smartList) return;
-
-    var favs = Library.books.filter(function (b) { return b.favorite; }).length;
-    var reading = Library.books.filter(function (b) { return !b.finished && b.page > 0; }).length;
-    var done = Library.books.filter(function (b) { return b.finished; }).length;
-
-    summary.innerHTML =
-      '<div class="stat-tile"><b>' + Library.books.length + '</b><span>Cómics</span></div>' +
-      '<div class="stat-tile"><b>' + Library.collections.length + '</b><span>Colecciones</span></div>' +
-      '<div class="stat-tile"><b>' + favs + '</b><span>Favoritos</span></div>';
-
-    var smart = [
-      { id: 'favorites', name: 'Favoritos', sub: favs + (favs === 1 ? ' cómic' : ' cómics'), icon: 'heart', books: Library.books.filter(function (b) { return b.favorite; }) },
-      { id: 'reading', name: 'En curso', sub: reading + (reading === 1 ? ' cómic' : ' cómics'), icon: 'clock', books: Library.books.filter(function (b) { return !b.finished && b.page > 0; }) },
-      { id: 'finished', name: 'Terminados', sub: done + (done === 1 ? ' cómic' : ' cómics'), icon: 'check', books: Library.books.filter(function (b) { return b.finished; }) }
-    ];
-
-    list.innerHTML = '';
-    smartList.innerHTML = '';
-    smart.forEach(function (s) {
-      var row = U.el('button', { class: 'shelf-card' });
-      var covers = U.el('div', { class: 'shelf-card__covers' });
-      s.books.slice(0, 3).forEach(function (b) {
-        var c = U.el('div', { class: 'cvg' });
-        var url = Library.coverUrlFor(b);
-        if (url) c.innerHTML = '<img src="' + url + '" alt="" loading="lazy">';
-        covers.appendChild(c);
-      });
-      if (!s.books.length) {
-        covers.innerHTML = '<div class="cvg" style="display:grid;place-items:center;color:var(--faint)">' + U.icon(s.icon) + '</div>';
-      }
-      row.appendChild(covers);
-      var body = U.el('div', { class: 'shelf-card__body' });
-      body.innerHTML = '<div class="shelf-card__name">' + U.escape(s.name) + '</div><div class="shelf-card__meta">' + s.sub + '</div>';
-      row.appendChild(body);
-      row.appendChild(U.el('span', { class: 'shelf-card__go', html: U.icon('chevron') }));
-      row.addEventListener('click', function () {
-        Library.state.collection = null;
-        Library.state.filter = s.id;
-        Library.state.query = '';
-        App.setTab('library');
-        Library.render();
-        U.toast('Estantería: ' + s.name, 'info', 1400);
-      });
-      smartList.appendChild(row);
-    });
-
-    Library.collections.forEach(function (col) {
-      var books = Library.books.filter(function (b) { return (b.collections || []).indexOf(col.id) >= 0; });
-      var row = U.el('button', { class: 'shelf-card' });
-      var covers = U.el('div', { class: 'shelf-card__covers' });
-      books.slice(0, 3).forEach(function (b) {
-        var c = U.el('div', { class: 'cvg' });
-        var url = Library.coverUrlFor(b);
-        if (url) c.innerHTML = '<img src="' + url + '" alt="" loading="lazy">';
-        covers.appendChild(c);
-      });
-      if (!books.length) covers.innerHTML = '<div class="cvg" style="display:grid;place-items:center;color:var(--faint)">' + U.icon('collection') + '</div>';
-      row.appendChild(covers);
-      var body = U.el('div', { class: 'shelf-card__body' });
-      body.innerHTML = '<div class="shelf-card__name">' + U.escape(col.name) + '</div><div class="shelf-card__meta">' + books.length + (books.length === 1 ? ' cómic' : ' cómics') + '</div>';
-      row.appendChild(body);
-      var more = U.el('button', { class: 'icon-btn icon-btn--sm', 'aria-label': 'Opciones de la colección', html: U.icon('more') });
-      more.addEventListener('click', function (e) {
-        e.stopPropagation();
-        openCollectionMenu(col);
-      });
-      row.appendChild(more);
-      row.addEventListener('click', function () {
-        Library.state.collection = col.id;
-        Library.state.filter = 'all';
-        App.setTab('library');
-        Library.render();
-        U.toast('Colección: ' + col.name, 'info', 1400);
-      });
-      list.appendChild(row);
-    });
-
-    empty.hidden = Library.collections.length > 0;
-  };
-
-  function openCollectionMenu(col) {
-    var content = U.el('div', { class: 'sheet-menu' });
-    var rename = U.el('button', { class: 'menu-item', html: U.icon('edit') });
-    rename.appendChild(U.el('span', { class: 'menu-item__label', text: 'Renombrar' }));
-    rename.addEventListener('click', function () {
-      sheet.close();
-      U.prompt({ title: 'Renombrar colección', label: 'Nombre', value: col.name }).then(function (name) {
-        if (!name) return;
-        col.name = name;
-        DB.put('collections', col).then(function () { App.renderShelves(); U.toast('Colección renombrada', 'ok'); });
-      });
-    });
-    content.appendChild(rename);
-    var del = U.el('button', { class: 'menu-item menu-item--danger', html: U.icon('trash') });
-    del.appendChild(U.el('span', { class: 'menu-item__label', text: 'Eliminar colección' }));
-    del.addEventListener('click', async function () {
-      sheet.close();
-      var ok = await U.confirm({
-        title: 'Eliminar colección',
-        message: 'Los cómics no se borrarán, solo dejarán de estar en «' + col.name + '».',
-        confirmText: 'Eliminar', danger: true
-      });
-      if (!ok) return;
-      await DB.del('collections', col.id);
-      Library.collections = Library.collections.filter(function (c) { return c.id !== col.id; });
-      Library.books.forEach(function (b) {
-        if ((b.collections || []).indexOf(col.id) >= 0) {
-          b.collections = b.collections.filter(function (id) { return id !== col.id; });
-          DB.put('books', b);
-        }
-      });
-      if (Library.state.collection === col.id) Library.state.collection = null;
-      App.renderShelves();
-      Library.render();
-      U.toast('Colección eliminada', 'ok');
-    });
-    content.appendChild(del);
-    var sheet = U.sheet({ title: col.name, sub: 'Colección', content: content });
-  }
+  /* ---------------- libraries (playlists) ---------------- */
+  /* La gestión vive en library.js; este alias mantiene la API histórica. */
+  App.renderShelves = function () { Library.renderRail(); };
 
   App.renderStats = function () {
     if (global.Stats) Stats.render();
@@ -331,8 +207,7 @@
     U.$$('.tab').forEach(function (btn) {
       btn.addEventListener('click', function () { App.setTab(btn.getAttribute('data-tab')); });
     });
-    U.$('#btnNewCollection').addEventListener('click', function () { Library.createCollection(); });
-    U.$('#btnNewCollection2').addEventListener('click', function () { Library.createCollection(); });
+    U.$('#btnNewLibrary').addEventListener('click', function () { Library.createLibrary(); });
     var appbar = U.$('.appbar');
     global.addEventListener('scroll', U.throttle(function () {
       if (appbar) appbar.classList.toggle('is-scrolled', global.scrollY > 4);
@@ -362,7 +237,6 @@
       Library.state.layout = App.settings.layout === 'list' ? 'list' : 'grid';
       if (App.settings.sort) Library.state.sort = App.settings.sort;
       Library.render();
-      App.renderShelves();
       App.renderStats();
       if (App.settings.theme === 'auto') App.applyTheme();
       if (!App.settings.welcomeSeen && Library.books.length === 0) {

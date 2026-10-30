@@ -5,7 +5,9 @@
   var Library = {
     books: [],
     collections: [],
-    state: { filter: 'all', sort: 'recent', query: '', layout: 'grid', collection: null },
+    // `collection` guarda la biblioteca (lista) abierta; el nombre se mantiene
+    // por compatibilidad con los datos ya guardados.
+    state: { filter: 'all', sort: 'title', query: '', layout: 'grid', collection: null },
     coverUrls: new Map()
   };
 
@@ -79,20 +81,86 @@
       var hay = U.fold([b.title, b.author, b.series, (b.tags || []).join(' '), b.publisher, b.year, b.type].join(' '));
       return hay.indexOf(q) >= 0;
     });
+    return sortBooks(list);
+  }
+
+  /* Comparación natural e insensible a acentos: «África» va antes que «Bleach». */
+  function byTitle(a, b, desc) {
+    var x = U.naturalCompare(U.fold(a.title || ''), U.fold(b.title || ''));
+    return desc ? -x : x;
+  }
+
+  function sortBooks(list) {
     var sort = Library.state.sort;
     list.sort(function (a, b) {
-      if (sort === 'title') return U.naturalCompare(a.title, b.title);
-      if (sort === 'added') return (b.addedAt || 0) - (a.addedAt || 0);
-      if (sort === 'pages') return (b.pageCount || 0) - (a.pageCount || 0);
-      if (sort === 'progress') return Library.progressOf(b) - Library.progressOf(a);
-      return (b.lastReadAt || 0) - (a.lastReadAt || 0) || (b.addedAt || 0) - (a.addedAt || 0);
+      switch (sort) {
+        case 'titleDesc': return byTitle(a, b, true);
+        case 'author': return U.naturalCompare(U.fold(a.author || '\uFFFF'), U.fold(b.author || '\uFFFF')) || byTitle(a, b);
+        case 'added': return (b.addedAt || 0) - (a.addedAt || 0) || byTitle(a, b);
+        case 'pages': return (b.pageCount || 0) - (a.pageCount || 0) || byTitle(a, b);
+        case 'progress': return Library.progressOf(b) - Library.progressOf(a) || byTitle(a, b);
+        case 'recent': return (b.lastReadAt || 0) - (a.lastReadAt || 0) || byTitle(a, b);
+        default: return byTitle(a, b);
+      }
     });
     return list;
   }
+  Library.sortBooks = sortBooks;
+
+  /* ---------- tomos de una misma serie ---------- */
+  function volumeIndex(book) {
+    var raw = String(book.number || '').replace(/[^0-9.,]/g, '').replace(',', '.');
+    var n = parseFloat(raw);
+    if (!isNaN(n)) return n;
+    // sin número: intenta sacarlo del título («One Piece 12»)
+    var m = String(book.title || '').match(/(\d+(?:[.,]\d+)?)\s*$/);
+    return m ? parseFloat(m[1].replace(',', '.')) : NaN;
+  }
+
+  Library.seriesOf = function (book) {
+    if (!book || !book.series) return [];
+    var key = U.fold(book.series).trim();
+    if (!key) return [];
+    return Library.books
+      .filter(function (b) { return b.id !== book.id && U.fold(b.series || '').trim() === key; })
+      .sort(function (a, b) {
+        var ia = volumeIndex(a), ib = volumeIndex(b);
+        if (!isNaN(ia) && !isNaN(ib) && ia !== ib) return ia - ib;
+        if (!isNaN(ia) && isNaN(ib)) return -1;
+        if (isNaN(ia) && !isNaN(ib)) return 1;
+        return U.naturalCompare(U.fold(a.title || ''), U.fold(b.title || ''));
+      });
+  };
+
+  /** Tomo anterior y siguiente dentro de la serie, si existen. */
+  Library.volumeNeighbours = function (book) {
+    if (!book || !book.series) return { prev: null, next: null };
+    var all = Library.books.filter(function (b) { return U.fold(b.series || '').trim() === U.fold(book.series).trim(); });
+    if (all.length < 2) return { prev: null, next: null };
+    all.sort(function (a, b) {
+      var ia = volumeIndex(a), ib = volumeIndex(b);
+      if (!isNaN(ia) && !isNaN(ib) && ia !== ib) return ia - ib;
+      if (!isNaN(ia) && isNaN(ib)) return -1;
+      if (isNaN(ia) && !isNaN(ib)) return 1;
+      return U.naturalCompare(U.fold(a.title || ''), U.fold(b.title || ''));
+    });
+    var i = all.findIndex(function (b) { return b.id === book.id; });
+    return { prev: all[i - 1] || null, next: all[i + 1] || null, all: all };
+  };
+
+  /* Los contadores respetan la biblioteca abierta: dentro de «Manga» el chip
+     «Todos» cuenta solo los mangas de esa lista. */
+  function scopeBooks() {
+    if (!Library.state.collection) return Library.books;
+    return Library.books.filter(function (b) {
+      return (b.collections || []).indexOf(Library.state.collection) >= 0;
+    });
+  }
 
   function counts() {
-    var c = { all: Library.books.length, reading: 0, unread: 0, finished: 0, favorites: 0 };
-    Library.books.forEach(function (b) {
+    var c = { all: 0, reading: 0, unread: 0, finished: 0, favorites: 0 };
+    scopeBooks().forEach(function (b) {
+      c.all++;
       var s = Library.statusOf(b);
       c[s]++;
       if (b.favorite) c.favorites++;
@@ -103,24 +171,33 @@
   var FILTERS = [
     { id: 'all', label: 'Todos' },
     { id: 'reading', label: 'Leyendo' },
-    { id: 'unread', label: 'Sin empezar' },
-    { id: 'finished', label: 'Terminados' },
-    { id: 'favorites', label: 'Favoritos' }
+    { id: 'favorites', label: 'Favoritos' },
+    { id: 'finished', label: 'Terminados' }
+  ];
+
+  var SORTS = [
+    { id: 'title', label: 'Título A–Z', short: 'A–Z' },
+    { id: 'titleDesc', label: 'Título Z–A', short: 'Z–A' },
+    { id: 'author', label: 'Autor A–Z', short: 'Autor' },
+    { id: 'recent', label: 'Última lectura', short: 'Recientes' },
+    { id: 'added', label: 'Añadidos recientemente', short: 'Nuevos' },
+    { id: 'pages', label: 'Número de páginas', short: 'Páginas' },
+    { id: 'progress', label: 'Progreso de lectura', short: 'Progreso' }
   ];
 
   function renderChips() {
     var c = counts();
-    var html = FILTERS.map(function (f) {
+    chipsEl.innerHTML = FILTERS.map(function (f) {
       return '<button class="chip' + (Library.state.filter === f.id ? ' is-active' : '') + '" data-filter="' + f.id + '" role="tab" aria-selected="' + (Library.state.filter === f.id) + '">' +
         U.escape(f.label) + '<span class="chip__count">' + (c[f.id] || 0) + '</span></button>';
     }).join('');
-    html += '<button class="chip chip--sort" data-sort-menu>' + U.icon('list') + sortLabel() + '</button>';
-    chipsEl.innerHTML = html;
+    var label = U.$('#sortLabel');
+    if (label) label.textContent = sortShort();
   }
 
-  function sortLabel() {
-    var map = { recent: 'Recientes', added: 'Añadidos', title: 'Título', pages: 'Páginas' };
-    return map[Library.state.sort] || 'Recientes';
+  function sortShort() {
+    var found = SORTS.filter(function (o) { return o.id === Library.state.sort; })[0];
+    return found ? found.short : 'A–Z';
   }
 
   function coverMarkup(book, withFav) {
@@ -171,6 +248,12 @@
 
   function renderContinue() {
     var strip = U.$('#continueStrip'), rail = U.$('#continueRail');
+    if (!strip) return;
+    if (Library.state.collection) {
+      strip.hidden = true;
+      rail.innerHTML = '';
+      return;
+    }
     var list = Library.books.filter(function (b) {
       return !b.finished && b.page > 0 && Library.progressOf(b) > 0;
     }).sort(function (a, b) { return (b.lastReadAt || 0) - (a.lastReadAt || 0); }).slice(0, 8);
@@ -194,13 +277,50 @@
 
   Library.renderContinue = function () { renderContinue(); };
 
+  /* Agrupa por letra cuando el orden es alfabético y hay bastantes cómics:
+     así se encuentra un título de un vistazo. */
+  function letterOf(book) {
+    var t = U.fold(book.title || '').trim();
+    var ch = t.charAt(0).toUpperCase();
+    return /[A-Z0-9]/.test(ch) ? ch : '#';
+  }
+
+  function gridMarkup(list) {
+    // Los separadores alfabéticos solo se usan en la vista de lista: en una
+    // cuadrícula de 2 columnas dejan huecos y rompen el ritmo visual.
+    var grouped = Library.state.layout === 'list' &&
+      (Library.state.sort === 'title' || Library.state.sort === 'titleDesc') && list.length >= 8;
+    var html = '';
+    var lastLetter = null;
+    list.forEach(function (book) {
+      if (grouped) {
+        var letter = letterOf(book);
+        if (letter !== lastLetter) {
+          lastLetter = letter;
+          html += '<div class="letter-sep" aria-hidden="true"><span>' + U.escape(letter) + '</span></div>';
+        }
+      }
+      html += bookCard(book);
+    });
+    return html;
+  }
+
   Library.render = function () {
     if (!grid) { grid = U.$('#libraryGrid'); emptyEl = U.$('#libraryEmpty'); chipsEl = U.$('#filterChips'); }
     var list = visibleBooks();
     var c = counts();
-    U.$('#libraryCount').textContent = c.all ? c.all + (c.all === 1 ? ' cómic' : ' cómics') : '';
     var chipsHost = U.$('#filterChips');
     var fab = U.$('#fabImport');
+    var home = U.$('#libraryHome');
+    var header = U.$('#libraryHeader');
+    var inLibrary = !!Library.state.collection;
+
+    if (home) home.hidden = inLibrary;
+    if (header) header.hidden = !inLibrary;
+    if (inLibrary) renderLibraryHeader();
+
+    U.$('#libraryCount').textContent = c.all ? c.all + (c.all === 1 ? ' cómic' : ' cómics') : '';
+
     if (Library.books.length === 0) {
       emptyEl.hidden = false;
       grid.innerHTML = '';
@@ -208,63 +328,256 @@
       if (chipsHost) chipsHost.hidden = true;
       if (fab) fab.hidden = true;
       renderContinue();
+      Library.renderRail();
       return;
     }
     if (chipsHost) chipsHost.hidden = false;
     if (fab) fab.hidden = App.currentTab === 'settings';
-    emptyEl.hidden = list.length > 0;
+    emptyEl.hidden = true;
+
     if (!list.length) {
+      var col = currentCollection();
+      grid.classList.remove('is-list');
       grid.innerHTML = '<div class="empty" style="grid-column:1/-1">' +
-        '<div class="empty__art empty__art--sm">' + U.icon('search', 'ico--xl') + '</div>' +
-        '<h3 class="empty__title">Sin resultados</h3>' +
-        '<p class="empty__text">No hay cómics que coincidan con este filtro o búsqueda.</p>' +
-        '<button class="btn btn--soft" data-clear-filters>Ver toda la biblioteca</button></div>';
+        '<div class="empty__art empty__art--sm">' + U.icon(inLibrary ? 'collection' : 'search', 'ico--xl') + '</div>' +
+        '<h3 class="empty__title">' + (inLibrary ? 'Esta biblioteca está vacía' : 'Sin resultados') + '</h3>' +
+        '<p class="empty__text">' + (inLibrary
+          ? 'Añade cómics a «' + U.escape(col ? col.name : '') + '» desde los detalles de cada cómic o importando archivos nuevos.'
+          : 'No hay cómics que coincidan con este filtro o búsqueda.') + '</p>' +
+        (inLibrary
+          ? '<button class="btn btn--primary" data-import>' + U.icon('plus') + ' Añadir cómics</button>'
+          : '<button class="btn btn--soft" data-clear-filters>Ver todos los cómics</button>') +
+        '</div>';
     } else {
       grid.classList.toggle('is-list', Library.state.layout === 'list');
-      grid.innerHTML = list.map(bookCard).join('');
+      grid.innerHTML = gridMarkup(list);
     }
     renderChips();
     renderContinue();
+    Library.renderRail();
   };
 
-  /* ---------- interactions ---------- */
-  function setTab(name) { if (global.App) global.App.setTab(name); }
+  function currentCollection() {
+    if (!Library.state.collection) return null;
+    return Library.collections.filter(function (c) { return c.id === Library.state.collection; })[0] || null;
+  }
+  Library.currentCollection = currentCollection;
 
-  function openCollectionFilter(id) {
+  function renderLibraryHeader() {
+    var col = currentCollection();
+    if (!col) { Library.state.collection = null; return; }
+    var books = Library.books.filter(function (b) { return (b.collections || []).indexOf(col.id) >= 0; });
+    var done = books.filter(function (b) { return b.finished; }).length;
+    U.$('#libraryTitle').textContent = col.name;
+    U.$('#librarySub').textContent = books.length
+      ? books.length + (books.length === 1 ? ' cómic' : ' cómics') + (done ? ' · ' + done + ' leído' + (done === 1 ? '' : 's') : '')
+      : 'Sin cómics todavía';
+  }
+
+  /* ---------- rail de bibliotecas (listas tipo playlist) ---------- */
+  Library.renderRail = function () {
+    var rail = U.$('#libraryRail');
+    if (!rail) return;
+    var cols = Library.collections.slice().sort(function (a, b) {
+      return U.naturalCompare(U.fold(a.name || ''), U.fold(b.name || ''));
+    });
+    if (!cols.length) {
+      rail.innerHTML = '<button class="lib-card lib-card--empty" id="railCreate">' +
+        '<span class="lib-card__covers lib-card__covers--empty">' + U.icon('collection') + '</span>' +
+        '<span class="lib-card__name">Crear biblioteca</span>' +
+        '<span class="lib-card__meta">Manga, Marvel, pendientes…</span></button>';
+      var create = U.$('#railCreate');
+      if (create) create.addEventListener('click', function () { Library.createLibrary(); });
+      return;
+    }
+    rail.innerHTML = cols.map(function (col) {
+      var books = Library.books.filter(function (b) { return (b.collections || []).indexOf(col.id) >= 0; });
+      var covers = books.slice(0, 4).map(function (b) {
+        var url = coverUrlFor(b);
+        return url ? '<img src="' + url + '" alt="" loading="lazy" decoding="async">' : '<i></i>';
+      }).join('');
+      if (!covers) covers = '<span class="lib-card__placeholder">' + U.icon('collection') + '</span>';
+      var coverClass = books.length ? ' lib-card__covers--n' + Math.min(books.length, 4) : ' lib-card__covers--empty';
+      return '<button class="lib-card" data-library="' + col.id + '">' +
+        '<span class="lib-card__covers' + coverClass + '">' + covers + '</span>' +
+        '<span class="lib-card__name">' + U.escape(col.name) + '</span>' +
+        '<span class="lib-card__meta">' + (books.length ? books.length + (books.length === 1 ? ' cómic' : ' cómics') : 'Vacía') + '</span>' +
+        '</button>';
+    }).join('');
+  };
+
+  Library.openLibrary = function (id) {
     Library.state.collection = id;
     Library.state.filter = 'all';
     Library.state.query = '';
     hideSearch();
-    setTab('library');
-    renderCollectionBanner();
+    if (global.App) App.setTab('library');
     Library.render();
-    U.$('#main').scrollTo ? U.$('#main').scrollTo(0, 0) : null;
-    global.scrollTo(0, 0);
-  }
+    global.scrollTo({ top: 0 });
+  };
 
-  function renderCollectionBanner() {
-    var existing = U.$('#collectionBanner');
-    if (existing) existing.remove();
-    if (!Library.state.collection) return;
-    var col = Library.collections.find(function (c) { return c.id === Library.state.collection; });
-    if (!col) { Library.state.collection = null; return; }
-    var banner = U.el('div', { class: 'chip-row', id: 'collectionBanner', style: { paddingTop: '10px', paddingBottom: '0' } });
-    banner.innerHTML = '<button class="chip is-active" data-collection-clear>' + U.icon('collection') + ' Colección: ' + U.escape(col.name) + U.icon('close') + '</button>';
-    var chips = U.$('#filterChips');
-    if (chips && chips.parentNode) chips.parentNode.insertBefore(banner, chips);
-    banner.querySelector('[data-collection-clear]').addEventListener('click', function () {
-      Library.state.collection = null;
-      libraryClear(); 
-    });
-  }
+  Library.closeLibrary = function () {
+    Library.state.collection = null;
+    Library.state.filter = 'all';
+    Library.render();
+    global.scrollTo({ top: 0 });
+    // Al volver a la portada, deja visible el carril de bibliotecas.
+    var home = U.$('#libraryHome');
+    if (home && home.scrollIntoView) home.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  /* ---------- interactions ---------- */
+  function setTab(name) { if (global.App) global.App.setTab(name); }
 
   function libraryClear() {
     Library.state.collection = null;
     Library.state.filter = 'all';
     Library.state.query = '';
     hideSearch();
-    renderCollectionBanner();
     Library.render();
+    var input = U.$('#searchInput');
+    if (input) input.value = '';
+  }
+
+  /* ---------- bibliotecas ---------- */
+  Library.createLibrary = function (cb) {
+    return U.prompt({
+      title: 'Nueva biblioteca',
+      label: 'Nombre',
+      placeholder: 'Manga, Marvel, Pendientes…',
+      confirmText: 'Crear'
+    }).then(function (name) {
+      if (!name) { if (cb) cb(null); return null; }
+      var col = { id: U.uid(), name: name.trim(), createdAt: Date.now() };
+      return DB.put('collections', col).then(function () {
+        Library.collections.push(col);
+        Library.renderRail();
+        U.toast('Biblioteca «' + col.name + '» creada', 'ok');
+        if (cb) cb(col);
+        return col;
+      });
+    });
+  };
+  var createCollection = Library.createLibrary; // alias histórico
+  Library.createCollection = Library.createLibrary;
+
+  Library.renameLibrary = async function (col) {
+    var name = await U.prompt({ title: 'Renombrar biblioteca', label: 'Nombre', value: col.name, confirmText: 'Guardar' });
+    if (!name) return;
+    col.name = name.trim();
+    await DB.put('collections', col);
+    Library.renderRail();
+    Library.render();
+    U.toast('Nombre actualizado', 'ok');
+  };
+
+  Library.deleteLibrary = async function (col) {
+    var ok = await U.confirm({
+      title: 'Eliminar biblioteca',
+      message: 'Los cómics no se borran: solo dejan de estar en «' + col.name + '».',
+      confirmText: 'Eliminar', danger: true
+    });
+    if (!ok) return;
+    await DB.del('collections', col.id);
+    Library.collections = Library.collections.filter(function (c) { return c.id !== col.id; });
+    Library.books.forEach(function (b) {
+      if ((b.collections || []).indexOf(col.id) >= 0) {
+        b.collections = b.collections.filter(function (id) { return id !== col.id; });
+        DB.put('books', b);
+      }
+    });
+    if (Library.state.collection === col.id) Library.state.collection = null;
+    Library.render();
+    U.toast('Biblioteca eliminada', 'ok');
+  };
+
+  Library.setBookInLibrary = function (book, col, on) {
+    book.collections = book.collections || [];
+    var has = book.collections.indexOf(col.id) >= 0;
+    if (on && !has) book.collections.push(col.id);
+    if (!on && has) book.collections = book.collections.filter(function (id) { return id !== col.id; });
+    return DB.put('books', book).then(function () {
+      Library.render();
+      Library.renderRail();
+      if (Library.state.collection === col.id) renderLibraryHeader();
+    });
+  };
+
+  function openLibraryMenu(col) {
+    var content = U.el('div', { class: 'sheet-menu' });
+    var item = function (icon, label, onClick, danger) {
+      var b = U.el('button', { class: 'menu-item' + (danger ? ' menu-item--danger' : ''), html: U.icon(icon) });
+      b.appendChild(U.el('span', { class: 'menu-item__label', text: label }));
+      b.addEventListener('click', function () { sheet.close(); setTimeout(onClick, 80); });
+      content.appendChild(b);
+      return b;
+    };
+    item('library', 'Abrir biblioteca', function () { Library.openLibrary(col.id); });
+    item('edit', 'Renombrar', function () { Library.renameLibrary(col); });
+    item('plus', 'Importar cómics aquí', function () {
+      Library.openLibrary(col.id);
+      setTimeout(function () { Library.importFiles(); }, 200);
+    });
+    item('trash', 'Eliminar biblioteca', function () { Library.deleteLibrary(col); }, true);
+    var sheet = U.sheet({ title: col.name, sub: 'Biblioteca', content: content });
+  }
+  Library.openLibraryMenu = openLibraryMenu;
+
+  function openSortSheet() {
+    var content = U.el('div', { class: 'sheet-menu' });
+    SORTS.forEach(function (o) {
+      var btn = U.el('button', { class: 'menu-item' + (Library.state.sort === o.id ? ' is-active' : ''), html: U.icon('sort') });
+      btn.appendChild(U.el('span', { class: 'menu-item__label', text: o.label }));
+      if (Library.state.sort === o.id) btn.appendChild(U.el('span', { class: 'badge-soft', text: 'Activo' }));
+      btn.addEventListener('click', function () {
+        Library.setSort(o.id);
+        sheet.close();
+      });
+      content.appendChild(btn);
+    });
+    var sheet = U.sheet({ title: 'Ordenar cómics', content: content });
+  }
+  Library.openSortSheet = openSortSheet;
+
+  Library.setSort = function (id) {
+    Library.state.sort = id;
+    if (global.App) App.saveSetting('sort', id);
+    Library.render();
+  };
+
+  Library.toggleLayout = function () {
+    Library.state.layout = Library.state.layout === 'grid' ? 'list' : 'grid';
+    if (global.App) App.saveSetting('layout', Library.state.layout);
+    var label = U.$('#menuViewLabel');
+    if (label) label.textContent = Library.state.layout === 'grid' ? 'Lista' : 'Cuadrícula';
+    Library.render();
+  };
+
+  /* Menú único de la barra superior: reúne lo secundario en un solo sitio. */
+  Library.openMenu = function () {
+    var content = U.el('div', { class: 'sheet-menu' });
+    var add = function (icon, label, onClick) {
+      var b = U.el('button', { class: 'menu-item', html: U.icon(icon) });
+      var wrap = U.el('span', { class: 'menu-item__label', text: label });
+      b.appendChild(wrap);
+      b.addEventListener('click', function () { sheet.close(); setTimeout(onClick, 90); });
+      content.appendChild(b);
+      return wrap;
+    };
+    add('collection', 'Nueva biblioteca', function () { Library.createLibrary(); });
+    add('sort', 'Ordenar por…', function () { openSortSheet(); });
+    var viewLabel = add('grid', 'Cambiar a lista', function () { Library.toggleLayout(); });
+    viewLabel.id = 'menuViewLabel';
+    viewLabel.textContent = Library.state.layout === 'grid' ? 'Cambiar a lista' : 'Cambiar a cuadrícula';
+    add('plus', 'Importar cómics', function () { Library.importFiles(); });
+    add('search', 'Buscar', function () { U.$('#btnSearch').click(); });
+    add('settings', 'Ajustes', function () { App.setTab('settings'); });
+    var sheet = U.sheet({ title: 'Menú', content: content });
+  };
+
+  function syncLayoutControl() {
+    var label = U.$('#menuViewLabel');
+    if (label) label.textContent = Library.state.layout === 'grid' ? 'Cambiar a lista' : 'Cambiar a cuadrícula';
   }
 
   function openBook(id) {
@@ -317,32 +630,7 @@
         Library.render();
         return;
       }
-      if (e.target.closest('[data-sort-menu]')) openSortSheet();
     });
-  }
-
-  function openSortSheet() {
-    var options = [
-      { id: 'recent', label: 'Última lectura', icon: 'clock' },
-      { id: 'added', label: 'Añadidos recientemente', icon: 'plus' },
-      { id: 'title', label: 'Título (A–Z)', icon: 'library' },
-      { id: 'pages', label: 'Número de páginas', icon: 'file' },
-      { id: 'progress', label: 'Progreso de lectura', icon: 'stats' }
-    ];
-    var content = U.el('div', { class: 'sheet-menu' });
-    options.forEach(function (o) {
-      var btn = U.el('button', { class: 'menu-item' + (Library.state.sort === o.id ? ' is-active' : ''), html: U.icon(o.icon) });
-      btn.appendChild(U.el('span', { class: 'menu-item__label', text: o.label }));
-      if (Library.state.sort === o.id) btn.appendChild(U.el('span', { class: 'badge-soft', text: 'Activo' }));
-      btn.addEventListener('click', function () {
-        Library.state.sort = o.id;
-        if (global.App) App.saveSetting('sort', o.id);
-        Library.render();
-        sheet.close();
-      });
-      content.appendChild(btn);
-    });
-    var sheet = U.sheet({ title: 'Ordenar biblioteca', content: content });
   }
 
   function openQuickActions(id) {
@@ -362,7 +650,7 @@
     add('info', 'Ver detalles', function () { openDetails(id); });
     add('heart', book.favorite ? 'Quitar de favoritos' : 'Añadir a favoritos', function () { toggleFavorite(book); });
     add('check', book.finished ? 'Marcar como no leído' : 'Marcar como leído', function () { toggleFinished(book); });
-    add('collection', 'Añadir a colección', function () { openCollectionPicker(book); });
+    add('collection', 'Añadir a biblioteca', function () { openLibraryPicker(book); });
     add('share', 'Compartir en el chat', function () { exportBook(book); });
     add('trash', 'Eliminar', function () { deleteBook(book); }, true);
     var sheet = U.sheet({ title: book.title, sub: typeLabel(book) + ' · ' + book.pageCount + ' páginas', content: content });
@@ -438,12 +726,16 @@
       '<div class="field"><label class="field__label" for="dt-tags">Etiquetas</label><div class="tag-list" data-tags></div></div>' +
       '<div class="field"><label class="field__label" for="dt-notes">Notas</label><textarea class="textarea" id="dt-notes" placeholder="Notas personales, opinión…">' + U.escape(book.notes || '') + '</textarea></div>' +
       '<div class="detail-section">' +
-        '<div class="detail-section__title">Colecciones</div>' +
+        '<div class="detail-section__title">Bibliotecas</div>' +
         '<div class="tag-list" data-collections></div>' +
       '</div>' +
       '<div class="detail-section">' +
         '<div class="detail-section__title">Marcadores</div>' +
         '<div data-bookmarks></div>' +
+      '</div>' +
+      '<div class="detail-section" data-series hidden>' +
+        '<div class="detail-section__title" data-series-title>Serie</div>' +
+        '<div class="volume-list" data-volumes></div>' +
       '</div>' +
       (book.notes ? '<div class="detail-section"><div class="detail-section__title">Sinopsis</div><p class="muted" style="font-size:13px;line-height:1.55;margin:0">' + U.escape(book.notes).slice(0, 600) + '</p></div>' : '') +
       '<div class="detail-section">' +
@@ -492,12 +784,18 @@
       var host = body.querySelector('[data-collections]');
       host.innerHTML = '';
       var owned = Library.collections.filter(function (c) { return (book.collections || []).indexOf(c.id) >= 0; });
-      if (!owned.length) host.appendChild(U.el('span', { class: 'muted', style: { fontSize: '12px' }, text: 'Sin colecciones' }));
+      if (!owned.length) host.appendChild(U.el('span', { class: 'muted', style: { fontSize: '12px' }, text: 'En ninguna biblioteca' }));
       owned.forEach(function (col) {
-        host.appendChild(U.el('span', { class: 'tag', text: col.name }));
+        var chip = U.el('span', { class: 'tag', text: col.name });
+        var x = U.el('button', { 'aria-label': 'Quitar de la biblioteca', html: U.icon('close') });
+        x.addEventListener('click', function () {
+          Library.setBookInLibrary(book, col, false).then(renderCollections);
+        });
+        chip.appendChild(x);
+        host.appendChild(chip);
       });
       var edit = U.el('button', { class: 'tag', style: { borderStyle: 'dashed' }, html: U.icon('collection') + ' Organizar' });
-      edit.addEventListener('click', function () { openCollectionPicker(book, renderCollections); });
+      edit.addEventListener('click', function () { openLibraryPicker(book, renderCollections); });
       host.appendChild(edit);
     }
 
@@ -572,70 +870,82 @@
       }
     });
 
+    function renderSeries() {
+      var wrap = body.querySelector('[data-series]');
+      var list = Library.seriesOf(book);
+      if (!list.length) { wrap.hidden = true; return; }
+      wrap.hidden = false;
+      body.querySelector('[data-series-title]').textContent = book.series;
+      var host = body.querySelector('[data-volumes]');
+      host.innerHTML = '';
+      var all = Library.volumeNeighbours(book).all || list.concat([book]);
+      all.forEach(function (vol) {
+        var current = vol.id === book.id;
+        var row = U.el('button', { class: 'volume-row' + (current ? ' is-current' : '') });
+        var n = vol.number || '';
+        row.innerHTML = '<span class="volume-row__num">' + U.escape(String(n || '·')) + '</span>' +
+          '<span class="volume-row__body"><span class="volume-row__title">' + U.escape(vol.title) + '</span>' +
+          '<span class="volume-row__meta">' + Library.progressOf(vol) + '% · ' + vol.pageCount + ' págs.</span></span>' +
+          (current ? '<span class="badge-soft">Leyendo</span>' : U.icon('chevron'));
+        if (!current) {
+          row.addEventListener('click', function () {
+            sheet.close();
+            setTimeout(function () { global.Reader.open(vol); }, 120);
+          });
+        }
+        host.appendChild(row);
+      });
+    }
+
     renderTags();
     renderCollections();
     renderBookmarks();
+    renderSeries();
     if (book.favorite) {
       var favBtn = body.querySelector('[data-act="fav"]');
       if (favBtn) favBtn.style.color = '#ec4899';
     }
   };
 
-  var openCollectionPicker = function (book, after) {
+  var openLibraryPicker = function (book, after) {
     var body = U.el('div');
     var render = function () {
       body.innerHTML = '';
       if (!Library.collections.length) {
-        body.innerHTML = '<p class="muted" style="font-size:13px;padding:4px 0 14px">Aún no tienes colecciones.</p>';
+        body.innerHTML = '<p class="muted" style="font-size:13px;padding:4px 0 14px">Todavía no tienes bibliotecas. Crea una para agrupar tus mangas.</p>';
       }
-      Library.collections.forEach(function (col) {
+      var cols = Library.collections.slice().sort(function (a, b) {
+        return U.naturalCompare(U.fold(a.name || ''), U.fold(b.name || ''));
+      });
+      cols.forEach(function (col) {
         var on = (book.collections || []).indexOf(col.id) >= 0;
         var row = U.el('button', { class: 'menu-item' });
         row.innerHTML = U.icon(on ? 'check' : 'collection');
         row.appendChild(U.el('span', { class: 'menu-item__label', text: col.name }));
         row.appendChild(U.el('span', { class: 'switch' + (on ? ' is-on' : '') }));
         row.addEventListener('click', function () {
-          book.collections = book.collections || [];
-          if (on) book.collections = book.collections.filter(function (id) { return id !== col.id; });
-          else book.collections.push(col.id);
-          DB.put('books', book).then(function () {
+          Library.setBookInLibrary(book, col, !on).then(function () {
             render();
             if (after) after();
-            Library.render();
-            if (global.App) App.renderShelves();
           });
         });
         body.appendChild(row);
       });
-      var create = U.el('button', { class: 'btn btn--soft btn--block', style: { marginTop: '12px' }, html: U.icon('plus') + ' Nueva colección' });
+      var create = U.el('button', { class: 'btn btn--soft btn--block', style: { marginTop: '12px' }, html: U.icon('plus') + ' Nueva biblioteca' });
       create.addEventListener('click', function () {
-        createCollection(function (col) {
-          if (col) {
-            book.collections = book.collections || [];
-            if (book.collections.indexOf(col.id) === -1) book.collections.push(col.id);
-            DB.put('books', book).then(function () { render(); if (after) after(); Library.render(); });
-          }
+        Library.createLibrary(function (col) {
+          if (!col) return;
+          Library.setBookInLibrary(book, col, true).then(function () {
+            render();
+            if (after) after();
+          });
         });
       });
       body.appendChild(create);
     };
     render();
-    U.sheet({ title: 'Colecciones', sub: book.title, content: body });
+    U.sheet({ title: 'Bibliotecas', sub: book.title, content: body });
   };
-
-  var createCollection = function (cb) {
-    U.prompt({ title: 'Nueva colección', label: 'Nombre', placeholder: 'Manga, Marvel, Pendientes…' }).then(function (name) {
-      if (!name) { if (cb) cb(null); return; }
-      var col = { id: U.uid(), name: name, createdAt: Date.now() };
-      DB.put('collections', col).then(function () {
-        Library.collections.push(col);
-        U.toast('Colección creada', 'ok');
-        if (global.App) App.renderShelves();
-        if (cb) cb(col);
-      });
-    });
-  };
-  Library.createCollection = createCollection;
 
   var exportBook = async function (book) {
     try {
@@ -739,16 +1049,18 @@
       var item = items[i];
       var source = null;
       try {
-        setState(item, 'working', 'Analizando archivo…', 12);
+        setState(item, 'working', 'Abriendo archivo…', 10);
+        // El hash y la apertura del archivo son independientes: en paralelo el
+        // importe de un tomo grande tarda bastante menos.
+        var hashPromise = U.hashBlob(item.file);
         source = await Sources.open({ blob: item.file, name: item.name });
         setState(item, 'working', 'Extrayendo portada…', 40);
-        var coverInfo = await Sources.buildCover(source, 420);
-        var info = null;
-        if (source.metaPromise) {
-          try { info = await source.metaPromise; } catch (e) { info = null; }
-        }
-        setState(item, 'working', 'Guardando en la biblioteca…', 72);
-        var hash = await U.hashBlob(item.file);
+        var coverPromise = Sources.buildCover(source, 420);
+        var metaPromise = source.metaPromise ? source.metaPromise.catch(function () { return null; }) : Promise.resolve(null);
+        var coverInfo = await coverPromise;
+        var info = await metaPromise;
+        setState(item, 'working', 'Guardando…', 74);
+        var hash = await hashPromise;
         var existing = Library.books.find(function (b) { return b.hash === hash; });
         if (existing) {
           dupes++;
@@ -762,12 +1074,16 @@
         if (info && info.genre) {
           tags = info.genre.split(/[,;]/).map(function (t) { return t.trim(); }).filter(Boolean).slice(0, 6);
         }
+        // Los mangas japoneses se leen de derecha a izquierda: si el archivo lo
+        // declara (ComicInfo «Manga» o idioma ja) empezamos en ese sentido.
+        var rtl = !!info && (/right/i.test(info.manga || '') || /^ja/i.test(info.language || ''));
         var book = {
           id: U.uid(),
           hash: hash,
           title: title,
           author: (info && info.writer) || '',
           series: (info && info.series) || '',
+          number: (info && info.number) || '',
           notes: (info && info.summary) || '',
           tags: tags,
           year: (info && info.year) || '',
@@ -784,8 +1100,10 @@
           favorite: false,
           collections: [],
           readingTime: 0,
-          prefs: {}
+          prefs: rtl ? { dir: 'rtl' } : {}
         };
+        // Si estamos dentro de una biblioteca, lo importado entra en ella.
+        if (Library.state.collection) book.collections = [Library.state.collection];
         await DB.put('files', { id: book.id, blob: item.file });
         await DB.put('books', book);
         Library.books.push(book);
@@ -812,10 +1130,8 @@
     U.toast(msg.length ? msg.join(' · ') : 'Nada que importar', failed ? 'err' : 'ok');
 
     await Library.refresh();
-    if (global.App) {
-      App.renderShelves();
-      App.renderStats();
-    }
+    await DB.persist();
+    if (global.App) App.renderStats();
   };
 
   /* ---------- progress persistence (used by the reader) ---------- */
@@ -860,31 +1176,48 @@
     bindGridEvents();
     bindChips();
     Library.state.layout = (App.settings && App.settings.layout) || 'grid';
-    applyLayoutIcon();
-    U.$('#btnLayout').addEventListener('click', function () {
-      Library.state.layout = Library.state.layout === 'grid' ? 'list' : 'grid';
-      if (global.App) App.saveSetting('layout', Library.state.layout);
-      applyLayoutIcon();
-      Library.render();
+
+    U.$('#btnMenu').addEventListener('click', function () { Library.openMenu(); });
+    U.$('#btnSort').addEventListener('click', function () { openSortSheet(); });
+    U.$('#btnNewLibrary').addEventListener('click', function () { Library.createLibrary(); });
+    U.$('#btnLibraryBack').addEventListener('click', function () { Library.closeLibrary(); });
+    U.$('#btnLibraryMenu').addEventListener('click', function () {
+      var col = currentCollection();
+      if (col) openLibraryMenu(col);
     });
-    // Single delegated trigger for every [data-import] control (FAB, empty state,
-    // onboarding). Adding local handlers as well caused a double file picker.
+
+    // Las tarjetas del carril abren su biblioteca.
+    var rail = U.$('#libraryRail');
+    rail.addEventListener('click', function (e) {
+      var card = e.target.closest('[data-library]');
+      if (card) Library.openLibrary(card.getAttribute('data-library'));
+    });
+    // Un toque largo sobre la tarjeta abre sus opciones.
+    var railTimer = null;
+    rail.addEventListener('pointerdown', function (e) {
+      var card = e.target.closest('[data-library]');
+      if (!card) return;
+      railTimer = setTimeout(function () {
+        railTimer = null;
+        var col = Library.collections.filter(function (c) { return c.id === card.getAttribute('data-library'); })[0];
+        if (col) openLibraryMenu(col);
+      }, 520);
+    });
+    ['pointerup', 'pointercancel', 'pointermove', 'pointerleave'].forEach(function (evt) {
+      rail.addEventListener(evt, function () { clearTimeout(railTimer); });
+    });
+
+    // Un único disparador delegado para todos los [data-import].
     document.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-import]');
       if (btn) { e.preventDefault(); Library.importFiles(); }
     });
   };
 
-  function applyLayoutIcon() {
-    var use = U.$('#layoutIcon use');
-    if (use) use.setAttribute('href', Library.state.layout === 'grid' ? '#i-list' : '#i-grid');
-    var btn = U.$('#btnLayout');
-    if (btn) btn.setAttribute('aria-label', Library.state.layout === 'grid' ? 'Ver como lista' : 'Ver como cuadrícula');
-  }
-
   /* ---------- search ---------- */
   function hideSearch() {
     var bar = U.$('#searchbar');
+    if (!bar) return;
     bar.hidden = true;
     var input = U.$('#searchInput');
     input.value = '';

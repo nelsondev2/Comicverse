@@ -4,11 +4,11 @@ name = "Comicverse"
 source_code_url = "https://github.com/nelsondev2/Comicverse"
 
 description = "Lector de cómics CBZ y PDF, 100 % local y sin conexión: biblioteca, colecciones, marcadores, modo página/doble/tira vertical, zoom y estadísticas de lectura."
-version = "1.0.1"
+version = "1.1.0"
 author = "nelsondev2"
 license = "MIT"
 image = "icon.png"
 
 # Metadata used by the webxdc app store (ignored by messengers)
 app_id = "comicverse"
-tag_name = "v1.0.1"
+tag_name = "v1.1.0"

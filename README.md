@@ -12,20 +12,26 @@ app funciona 100 % offline y nunca habla con ningún servidor.
 | --- | --- | --- | --- |
 | ![Biblioteca](docs/screenshots/03-library.png) | ![Lector](docs/screenshots/05-reader.png) | ![Doble página](docs/screenshots/08-spread.png) | ![Tira vertical](docs/screenshots/09-scroll.png) |
 
-| Ficha del cómic | Ajustes de lectura | Miniaturas | Estanterías |
+| Ficha del cómic | Ajustes de lectura | Miniaturas | Una biblioteca |
 | --- | --- | --- | --- |
-| ![Detalles](docs/screenshots/04-details.png) | ![Ajustes de lectura](docs/screenshots/06-reader-settings.png) | ![Miniaturas](docs/screenshots/07-thumbnails.png) | ![Estanterías](docs/screenshots/11-shelves.png) |
+| ![Detalles](docs/screenshots/04-details.png) | ![Ajustes de lectura](docs/screenshots/06-reader-settings.png) | ![Miniaturas](docs/screenshots/07-thumbnails.png) | ![Biblioteca](docs/screenshots/11-library.png) |
 
-| PDF | Estadísticas | Ajustes | Escritorio |
+| PDF | Menú | Estadísticas | Escritorio |
 | --- | --- | --- | --- |
-| ![PDF](docs/screenshots/10-pdf.png) | ![Estadísticas](docs/screenshots/12-stats.png) | ![Ajustes](docs/screenshots/13-settings.png) | ![Escritorio](docs/screenshots/15-desktop.png) |
+| ![PDF](docs/screenshots/10-pdf.png) | ![Menú](docs/screenshots/16-menu.png) | ![Estadísticas](docs/screenshots/12-stats.png) | ![Escritorio](docs/screenshots/15-desktop.png) |
+
+| Ajustes | Tema claro | Bienvenida | Importando |
+| --- | --- | --- | --- |
+| ![Ajustes](docs/screenshots/13-settings.png) | ![Tema claro](docs/screenshots/14-light.png) | ![Bienvenida](docs/screenshots/01-welcome.png) | ![Importar](docs/screenshots/02-importing.png) |
 
 ---
 
 ## Características
 
 ### Lectura
-- **CBZ/ZIP** (descomprime en memoria con JSZip) y **PDF** (pdf.js en worker, render a canvas nítido por DPI).
+- **CBZ/ZIP** con **lector ZIP diferido**: solo se lee el índice del archivo y cada página se descomprime al
+  pedirla, así que un tomo de 116 MB abre en ~6 ms en vez de varios segundos (con reserva automática a JSZip
+  en navegadores antiguos) y **PDF** (pdf.js en worker, render a canvas nítido por DPI).
 - Tres modos: **página única**, **página doble** (con reparto correcto de portada e impares) y **tira vertical** (webtoon).
 - **Zoom con pellizco** (1×–6×) con paneo limitado a los bordes de la página, **doble toque** para zoom rápido y rueda/trackpad en escritorio.
 - Ajuste **página / ancho / alto**, fondo **negro / gris / claro**, control de **brillo**, **modo nocturno**.
@@ -35,12 +41,19 @@ app funciona 100 % offline y nunca habla con ningún servidor.
 - Preferencias **por cómic** + valores predeterminados globales.
 
 ### Biblioteca
+- Archivo **ordenado alfabéticamente por defecto** (natural, sin acentos y con los números primero);
+  también por Z–A, autor, última lectura, fecha de alta, páginas o progreso, y separadores de letra en la vista de lista.
 - Importación múltiple con cola de progreso, **detección de duplicados** por hash y extracción automática de portada.
 - **Metadatos ComicInfo.xml**: título, serie, autor, editorial, año, géneros y sinopsis.
-- Búsqueda **sin acentos**, filtros (todos / leyendo / sin empezar / terminados / favoritos), orden y vistas **cuadrícula/lista**.
-- Ficha de detalle: edición de título, autor, serie, etiquetas, notas, favoritos, colecciones y marcadores.
+  Si el archivo declara un manga japonés, el lector arranca en **derecha→izquierda**.
+- Búsqueda **sin acentos**, filtros (todos / leyendo / favoritos / terminados) y vistas **cuadrícula/lista**.
+- Ficha de detalle: edición de título, autor, serie, etiquetas, notas, favoritos, bibliotecas y marcadores.
 - **Continuar leyendo** en la portada, progreso visible en cada portada.
-- **Estanterías inteligentes** (favoritos, en curso, terminados) y **colecciones** propias.
+- **Bibliotecas** independientes, como listas de reproducción: carril en la portada, cabecera propia al abrirlas,
+  contadores y filtros acotados a la lista, y añadir/quitar cómics desde la ficha o con el menú de la tarjeta.
+- **Series y tomos**: la ficha lista los tomos de la serie ordenados por número y el lector salta al tomo
+  anterior/siguiente desde su menú. Los CBZ que declaran manga japonés arrancan en derecha→izquierda.
+- **Un solo menú** (⋮) en la barra superior: nueva biblioteca, orden, vista, importar, buscar y ajustes.
 
 ### Estadísticas y datos
 - Tiempo de lectura, páginas leídas, racha de días y gráfico de los últimos 7 días.
@@ -70,7 +83,8 @@ Comicverse/
 │   │   ├── util.js         # helpers, toasts, sheets/modales
 │   │   ├── db.js           # IndexedDB (libros, archivos, marcadores, colecciones, stats)
 │   │   ├── wx.js           # capa webxdc + fallbacks de navegador
-│   │   ├── sources.js      # CBZ (JSZip) + PDF (pdf.js) + portadas
+│   │   ├── lazyzip.js      # lector ZIP diferido (índice + DecompressionStream)
+│   │   ├── sources.js      # CBZ (diferido con reserva a JSZip) + PDF (pdf.js) + portadas
 │   │   ├── library.js      # biblioteca, importación, metadatos, colecciones
 │   │   ├── reader.js       # motor de lectura (paginado, doble, scroll, zoom, gestos)
 │   │   ├── stats.js        # estadísticas
@@ -98,13 +112,13 @@ El simulador de webxdc permite probar `importFiles`, `sendToChat` y las actualiz
 
 ```bash
 node tests/make-fixtures.mjs   # genera 2 CBZ (con ComicInfo.xml) + 1 PDF de ejemplo
-node tests/smoke.mjs           # 37 comprobaciones E2E + capturas en tests/shots
-node tests/audit.mjs           # auditoría: red, fugas, memoria, a11y, sync, XSS, escala
+node tests/smoke.mjs           # 43 comprobaciones E2E + capturas en tests/shots
+node tests/audit.mjs           # auditoría: red, fugas, memoria, a11y, sync, XSS, escala, ZIP diferido, bibliotecas, orden
 node tests/xdc-test.mjs        # prueba el .xdc empaquetado como lo haría el mensajero
 node dev/docs-shots.mjs        # regenera las capturas de docs/screenshots
 ```
 
-Los resultados de la auditoría técnica (17 secciones, hallazgos y correcciones) están en
+Los resultados de la auditoría técnica (22 secciones, hallazgos y correcciones) están en
 [`docs/AUDITORIA.md`](docs/AUDITORIA.md).
 
 Todos los scripts usan Chromium headless mediante `puppeteer-core` (instalado aparte, fuera del repo).
@@ -114,7 +128,7 @@ Todos los scripts usan Chromium headless mediante `puppeteer-core` (instalado ap
 ## Empaquetar
 
 ```bash
-./build.sh                     # → release/comicverse-1.0.1.xdc (~2,2 MB)
+./build.sh                     # → release/comicverse-1.1.0.xdc (~2,2 MB)
 ```
 
 El `.xdc` es un ZIP con `index.html`, `manifest.toml`, `icon.png` y `assets/`. Comparte el archivo en

@@ -54,6 +54,7 @@
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10.5 19a2 2 0 0 0 3 0"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9l-6-6Z"/><path d="M13 3v6h6"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M4 7h11M4 12h8M4 17h5"/><path d="M18 6v12M18 18l3-3M18 18l-3-3"/></symbol>
   <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 20V5M12 5 6 11M12 5l6 6"/></symbol>
 </svg>
 
@@ -71,8 +72,8 @@
         <button class="icon-btn" id="btnSearch" aria-label="Buscar" title="Buscar">
           <svg class="ico"><use href="#i-search"/></svg>
         </button>
-        <button class="icon-btn" id="btnLayout" aria-label="Cambiar vista" title="Cambiar vista">
-          <svg class="ico" id="layoutIcon"><use href="#i-list"/></svg>
+        <button class="icon-btn" id="btnMenu" aria-label="Menú" title="Menú" aria-haspopup="dialog">
+          <svg class="ico"><use href="#i-more"/></svg>
         </button>
       </div>
     </div>
@@ -94,10 +95,33 @@
         <div class="continue-rail" id="continueRail"></div>
       </div>
 
-      <div class="section-head section-head--lib">
-        <h2 class="section-title">Tu biblioteca</h2>
-        <span class="section-sub" id="libraryCount"></span>
+      <div id="libraryHome">
+        <div class="section-head section-head--rail">
+          <h2 class="section-title">Bibliotecas</h2>
+          <button class="text-btn" id="btnNewLibrary"><svg class="ico"><use href="#i-plus"/></svg> Nueva</button>
+        </div>
+        <div class="lib-rail" id="libraryRail"></div>
+
+        <div class="section-head section-head--lib">
+          <div class="section-head__main">
+            <h2 class="section-title">Todos los cómics</h2>
+            <span class="section-sub" id="libraryCount"></span>
+          </div>
+          <button class="sort-btn" id="btnSort" aria-haspopup="dialog" aria-label="Ordenar cómics">
+            <svg class="ico"><use href="#i-sort"/></svg><span id="sortLabel">A–Z</span>
+          </button>
+        </div>
       </div>
+
+      <div class="lib-head" id="libraryHeader" hidden>
+        <button class="icon-btn" id="btnLibraryBack" aria-label="Salir de la biblioteca"><svg class="ico"><use href="#i-back"/></svg></button>
+        <div class="lib-head__body">
+          <h2 class="lib-head__title" id="libraryTitle">—</h2>
+          <span class="lib-head__sub" id="librarySub"></span>
+        </div>
+        <button class="icon-btn" id="btnLibraryMenu" aria-label="Opciones de la biblioteca"><svg class="ico"><use href="#i-more"/></svg></button>
+      </div>
+
       <div class="chip-row" id="filterChips" role="tablist" aria-label="Filtros"></div>
 
       <div class="library" id="libraryGrid" aria-live="polite"></div>
@@ -128,33 +152,6 @@
       </div>
     </section>
 
-    <!-- Shelves -->
-    <section class="view" data-view="shelves" id="viewShelves">
-      <div class="page-head">
-        <h1 class="page-title">Estanterías</h1>
-        <p class="page-sub">Organiza tu colección en colecciones propias.</p>
-      </div>
-      <div class="shelf-summary" id="shelfSummary"></div>
-
-      <div class="section-head">
-        <h2 class="section-title">Estanterías inteligentes</h2>
-        <span class="section-sub">Automáticas</span>
-      </div>
-      <div class="shelf-list" id="smartList"></div>
-
-      <div class="section-head">
-        <h2 class="section-title">Mis colecciones</h2>
-        <button class="text-btn" id="btnNewCollection"><svg class="ico"><use href="#i-plus"/></svg> Nueva</button>
-      </div>
-      <div class="shelf-list" id="shelfList"></div>
-      <div class="empty empty--compact" id="shelfEmpty" hidden>
-        <div class="empty__art empty__art--sm"><svg viewBox="0 0 24 24" class="ico ico--xl"><use href="#i-collection"/></svg></div>
-        <h3 class="empty__title">Sin colecciones todavía</h3>
-        <p class="empty__text">Crea estanterías como «Manga», «Marvel» o «Pendientes» y agrupa tus cómics.</p>
-        <button class="btn btn--soft" id="btnNewCollection2"><svg class="ico"><use href="#i-plus"/></svg> Crear colección</button>
-      </div>
-    </section>
-
     <!-- Stats -->
     <section class="view" data-view="stats" id="viewStats">
       <div class="page-head">
@@ -179,10 +176,6 @@
     <button class="tab is-active" data-tab="library" aria-current="page">
       <span class="tab__ico"><svg class="ico"><use href="#i-library"/></svg></span>
       <span class="tab__label">Biblioteca</span>
-    </button>
-    <button class="tab" data-tab="shelves">
-      <span class="tab__ico"><svg class="ico"><use href="#i-shelf"/></svg></span>
-      <span class="tab__label">Estanterías</span>
     </button>
     <button class="tab" data-tab="stats">
       <span class="tab__ico"><svg class="ico"><use href="#i-stats"/></svg></span>
@@ -255,6 +248,7 @@
 <script src="assets/js/util.js"></script>
 <script src="assets/js/db.js"></script>
 <script src="assets/js/wx.js"></script>
+<script src="assets/js/lazyzip.js"></script>
 <script src="assets/js/sources.js"></script>
 <script src="assets/js/library.js"></script>
 <script src="assets/js/reader.js"></script>

@@ -395,9 +395,8 @@ const scale = await page.evaluate(async () => {
   await Library.openDetails('synthetic-3');
   await new Promise((r) => setTimeout(r, 300));
   U.closeAllSheets();
-  App.setTab('shelves');
   const t1 = performance.now();
-  App.renderShelves();
+  Library.renderRail();
   const shelvesMs = Math.round(performance.now() - t1);
   App.setTab('stats');
   const t2 = performance.now();
@@ -410,7 +409,7 @@ const scale = await page.evaluate(async () => {
 });
 console.log('  ', scale);
 if (scale.renderMs > 250) add('PERF-01', 'media', 'Render de la biblioteca lento', `${scale.renderMs} ms con 250 cómics`);
-if (scale.shelvesMs > 200) add('PERF-02', 'baja', 'Estanterías lentas', `${scale.shelvesMs} ms`);
+if (scale.shelvesMs > 200) add('PERF-02', 'baja', 'Carril de bibliotecas lento', `${scale.shelvesMs} ms`);
 if (scale.statsMs > 200) add('PERF-03', 'baja', 'Estadísticas lentas', `${scale.statsMs} ms`);
 if (scale.renderMs <= 250 && scale.shelvesMs <= 200 && scale.statsMs <= 200) {
   add('PERF-01', 'info', 'Biblioteca de 250 cómics fluida', `${scale.renderMs} ms lista, ${scale.cards} tarjetas`, 'ok');
@@ -475,7 +474,167 @@ if (keyboard.afterRight === keyboard.start + 1 && keyboard.atEnd && keyboard.boo
   add('KBD-01', 'info', 'Atajos del lector correctos', '←/→, Fin, m, Esc', 'ok');
 }
 
-console.log('\n=== 16. datos: archivo ausente ===');
+console.log('\n=== 18. lector ZIP diferido (tomos grandes) ===');
+const lazy = await page.evaluate(async () => {
+  if (!window.LazyZip || !LazyZip.supported) return { supported: false };
+  const out = { supported: true };
+  const res = await fetch('/tests/fixtures/manga-grande.cbz');
+  if (!res.ok) return { supported: true, missing: true };
+  const blob = await res.blob();
+  out.sizeMB = +(blob.size / 1048576).toFixed(1);
+  let t = performance.now();
+  const src = await Sources.open({ blob, name: 'manga-grande.cbz' });
+  out.openMs = Math.round(performance.now() - t);
+  out.lazyPath = !!src.lazy;
+  out.pages = src.pageCount;
+  t = performance.now();
+  await Sources.buildCover(src, 420);
+  out.coverMs = Math.round(performance.now() - t);
+  t = performance.now();
+  const url = await src.urlFor(Math.min(60, src.pageCount - 1));
+  out.deepPageMs = Math.round(performance.now() - t);
+  // la página se decodifica de verdad
+  out.decodes = await new Promise(function (resolve) {
+    const img = new Image();
+    img.onload = function () { resolve(img.naturalWidth > 0); };
+    img.onerror = function () { resolve(false); };
+    img.src = url;
+  });
+  src.close();
+  // mismo archivo con el lector clásico (JSZip), para comparar
+  const lazySupported = window.LazyZip.supported;
+  window.LazyZip.supported = false;
+  t = performance.now();
+  const js = await Sources.open({ blob, name: 'manga-grande.cbz' });
+  out.jszipOpenMs = Math.round(performance.now() - t);
+  js.close();
+  window.LazyZip.supported = lazySupported;
+  return out;
+});
+console.log('  ', lazy);
+if (lazy.supported && !lazy.missing) {
+  if (!lazy.lazyPath) add('PERF-04', 'alta', 'El lector ZIP diferido no se usa', 'cae siempre en JSZip');
+  if (lazy.openMs > 300) add('PERF-05', 'media', 'Abrir un tomo grande sigue siendo lento', `${lazy.openMs} ms para ${lazy.sizeMB} MB`);
+  if (!lazy.decodes) add('PERF-06', 'alta', 'La página leída en modo diferido no se decodifica', 'imagen rota');
+  if (lazy.lazyPath && lazy.openMs <= 300 && lazy.decodes) {
+    add('PERF-04', 'info', 'Apertura de tomos grandes casi instantánea',
+      `${lazy.sizeMB} MB: ${lazy.openMs} ms (JSZip ${lazy.jszipOpenMs} ms), ${lazy.pages} páginas`, 'ok');
+  }
+}
+
+console.log('\n=== 19. bibliotecas (listas) ===');
+const libs = await page.evaluate(async () => {
+  const out = {};
+  const mk = async (name, ids) => {
+    const col = { id: U.uid(), name, createdAt: Date.now() };
+    await DB.put('collections', col);
+    Library.collections.push(col);
+    for (const id of ids) {
+      const b = Library.bookById(id);
+      if (!b) continue;
+      b.collections = [col.id];
+      await DB.put('books', b);
+    }
+    return col;
+  };
+  // La auditoría solo ha importado un cómic: creamos tres de prueba para que
+  // el escenario de bibliotecas no dependa de datos externos.
+  const base = Library.books[0] || {};
+  Library.books = [1, 2, 3].map(function (n) {
+    return Object.assign({}, base, {
+      id: 'lib-' + n, hash: 'libh-' + n, title: 'Cómic ' + n, collections: [],
+      page: 0, finished: false, favorite: false, tags: [], readingTime: 0, addedAt: Date.now() - n
+    });
+  });
+  Library.collections = [];
+  const books = Library.books.map((b) => b.id);
+  const manga = await mk('Manga', books.slice(0, 2));
+  await mk('Marvel', books.slice(2));
+  Library.render();
+  await new Promise((r) => setTimeout(r, 300));
+
+  out.railCards = document.querySelectorAll('.lib-card[data-library]').length;
+  out.sortedAz = [...document.querySelectorAll('.lib-card[data-library] .lib-card__name')].map((n) => n.textContent);
+
+  Library.openLibrary(manga.id);
+  await new Promise((r) => setTimeout(r, 300));
+  out.headerHidden = document.querySelector('#libraryHeader').hidden;
+  out.homeHidden = document.querySelector('#libraryHome').hidden;
+  out.title = document.querySelector('#libraryTitle').textContent;
+  out.cardsInLibrary = document.querySelectorAll('#libraryGrid .book-card').length;
+  out.allChip = document.querySelector('#filterChips .chip').textContent;
+  out.continueHidden = document.querySelector('#continueStrip').hidden;
+
+  // un cómic fuera de la biblioteca no debe aparecer
+  out.foreignHidden = ![...document.querySelectorAll('#libraryGrid .book-card')]
+    .some((c) => c.getAttribute('data-id') === books[2]);
+
+  Library.closeLibrary();
+  await new Promise((r) => setTimeout(r, 250));
+  out.backHome = !!document.querySelector('#libraryHome') && !document.querySelector('#libraryHome').hidden;
+  out.cardsGlobal = document.querySelectorAll('#libraryGrid .book-card').length;
+  return out;
+});
+console.log('  ', libs);
+if (libs.railCards < 2) add('LIB-01', 'alta', 'Las bibliotecas no aparecen en el carril', `${libs.railCards} tarjetas`);
+if (libs.sortedAz.join('|') !== 'Manga|Marvel') add('LIB-02', 'media', 'Las bibliotecas no se ordenan alfabéticamente', libs.sortedAz.join(', '));
+if (libs.headerHidden || !libs.homeHidden) add('LIB-03', 'alta', 'La cabecera de la biblioteca no sustituye a la portada', JSON.stringify(libs));
+if (libs.cardsInLibrary !== 2) add('LIB-04', 'alta', 'El filtro por biblioteca muestra cómics de fuera', `${libs.cardsInLibrary} tarjetas`);
+if (libs.foreignHidden === false) add('LIB-05', 'alta', 'Se cuela un cómic ajeno en la biblioteca', 'visible');
+if (!libs.continueHidden) add('LIB-06', 'baja', '«Continuar leyendo» sigue visible dentro de una biblioteca', 'ocupa espacio');
+if (!/^Todos\s*2$/.test(libs.allChip.trim())) add('LIB-07', 'media', 'Los contadores de filtro no respetan la biblioteca', libs.allChip);
+if (!libs.backHome) add('LIB-08', 'alta', 'No se puede volver a la portada desde una biblioteca', 'sin salida');
+if (libs.railCards >= 2 && libs.headerHidden === false && libs.cardsInLibrary === 2 && libs.backHome && libs.foreignHidden) {
+  add('LIB-01', 'info', 'Bibliotecas independientes funcionando', 'carril, cabecera, filtro y contadores', 'ok');
+}
+
+console.log('\n=== 20. orden alfabético ===');
+const alpha = await page.evaluate(async () => {
+  const originals = Library.books.slice();
+  const titles = ['Ñandú', 'bleach', 'Akira', 'Ángeles', '20th Century Boys', 'One Piece', 'Zetman', 'naruto'];
+  Library.books = titles.map(function (t, i) {
+    return {
+      id: 'alpha-' + i, hash: 'ha' + i, title: t, author: i % 2 ? 'Zeta' : 'Alfa', type: 'cbz',
+      pageCount: 20 + i, page: 0, addedAt: Date.now() - i * 1000, lastReadAt: 0,
+      favorite: false, tags: [], collections: [], finished: false, readingTime: 0, prefs: {}
+    };
+  });
+  Library.state.sort = 'title';
+  Library.state.collection = null;
+  Library.render();
+  await new Promise((r) => setTimeout(r, 250));
+  const asc = [...document.querySelectorAll('.book-card__title')].map((n) => n.textContent);
+  Library.state.sort = 'titleDesc';
+  Library.render();
+  await new Promise((r) => setTimeout(r, 250));
+  const desc = [...document.querySelectorAll('.book-card__title')].map((n) => n.textContent);
+  Library.state.sort = 'author';
+  Library.render();
+  await new Promise((r) => setTimeout(r, 200));
+  const authors = [...document.querySelectorAll('.book-card__meta')].map((n) => n.textContent.split(' · ')[0]);
+  Library.state.sort = 'title';
+  Library.state.layout = 'list';
+  Library.render();
+  await new Promise((r) => setTimeout(r, 250));
+  const sep = [...document.querySelectorAll('.letter-sep span')].map((n) => n.textContent);
+  Library.state.layout = 'grid';
+  Library.render();
+  Library.books = originals;
+  Library.render();
+  return { asc, desc, authors, sep };
+});
+console.log('  ', alpha);
+// La Ñ se pliega a N (orden «natural» internacional); es la convención usada.
+if (JSON.stringify(alpha.asc) !== JSON.stringify(['20th Century Boys', 'Akira', 'Ángeles', 'bleach', 'Ñandú', 'naruto', 'One Piece', 'Zetman'])) {
+  add('SORT-01', 'alta', 'El orden A–Z no es natural ni insensible a acentos', alpha.asc.join(', '));
+}
+if (JSON.stringify(alpha.desc) !== JSON.stringify(alpha.asc.slice().reverse())) {
+  add('SORT-02', 'media', 'El orden Z–A no invierte el A–Z', alpha.desc.join(', '));
+}
+if (!alpha.sep.length) add('SORT-03', 'baja', 'Sin separadores alfabéticos en la vista de lista', 'lista larga sin letras');
+if (alpha.asc[0] !== '20th Century Boys') add('SORT-04', 'media', 'Los títulos numéricos no van primero', alpha.asc[0]);
+
+console.log('\n=== 21. datos: archivo ausente ===');
 const missing = await page.evaluate(async () => {
   const book = Library.books[0];
   await DB.del('files', book.id);
@@ -489,7 +648,7 @@ const missing = await page.evaluate(async () => {
 console.log('  lector abierto sin archivo:', missing.open, '| aviso:', missing.toastText);
 if (missing.open) add('DATA-02', 'media', 'El lector no informa de la ausencia del archivo', JSON.stringify(missing));
 
-console.log('\n=== 17. errores de consola durante la auditoría ===');
+console.log('\n=== 22. errores de consola durante la auditoría ===');
 const uniqueErrors = [...new Set(consoleErrors)];
 console.log('  ', uniqueErrors.length ? uniqueErrors.slice(0, 6) : 'ninguno');
 if (uniqueErrors.length) add('ERR-01', 'media', 'Errores en consola', uniqueErrors.slice(0, 3).join(' | '));

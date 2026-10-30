@@ -78,11 +78,16 @@ await page.evaluate(async () => {
   a.page = 6; a.lastReadAt = Date.now() - 1000;
   b.page = 3; b.lastReadAt = Date.now() - 90000;
   c.favorite = true;
-  const col = { id: 'col-manga', name: 'Manga', createdAt: Date.now() };
-  Library.collections.push(col);
-  a.collections = ['col-manga'];
-  await Promise.all([DB.put('books', a), DB.put('books', b), DB.put('books', c), DB.put('collections', col)]);
-  App.renderShelves();
+  const manga = { id: 'col-manga', name: 'Manga', createdAt: Date.now() };
+  const europa = { id: 'col-europa', name: 'Novela gráfica', createdAt: Date.now() - 1000 };
+  Library.collections.push(manga, europa);
+  a.collections = [manga.id];
+  b.collections = [manga.id, europa.id];
+  c.collections = [europa.id];
+  await Promise.all([
+    DB.put('books', a), DB.put('books', b), DB.put('books', c),
+    DB.put('collections', manga), DB.put('collections', europa)
+  ]);
   Library.render();
 });
 await sleep(900);
@@ -129,9 +134,17 @@ await page.screenshot({ path: `${OUT}/10-pdf.png` });
 await page.evaluate(() => Reader.close());
 await sleep(1200);
 
-await page.evaluate(() => App.setTab('shelves'));
+await page.evaluate(() => Library.openLibrary('col-manga'));
 await sleep(900);
-await page.screenshot({ path: `${OUT}/11-shelves.png` });
+await page.screenshot({ path: `${OUT}/11-library.png` });
+await page.evaluate(() => Library.closeLibrary());
+await sleep(500);
+
+await page.evaluate(() => Library.openMenu());
+await sleep(800);
+await page.screenshot({ path: `${OUT}/16-menu.png` });
+await page.evaluate(() => U.closeAllSheets());
+await sleep(500);
 
 await page.evaluate(() => App.setTab('stats'));
 await sleep(900);
